@@ -1,0 +1,137 @@
+diff --git a/linux/arch/x86/entry/syscalls/syscall_32.tbl b/linux/arch/x86/entry/syscalls/syscall_32.tbl
+index 0d0667a9f..99e1a52bb 100644
+--- a/linux/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/linux/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -445,3 +445,8 @@
+ 438	i386	pidfd_getfd		sys_pidfd_getfd
+ 439	i386	faccessat2		sys_faccessat2
+ 440	i386	process_madvise		sys_process_madvise
++
++501	i386	kkv_init		sys_kkv_init
++502	i386	kkv_destroy		sys_kkv_destroy
++503	i386	kkv_put			sys_kkv_put
++504	i386	kkv_get			sys_kkv_get
+diff --git a/linux/arch/x86/entry/syscalls/syscall_64.tbl b/linux/arch/x86/entry/syscalls/syscall_64.tbl
+index 379819244..673f4126b 100644
+--- a/linux/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/linux/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -363,6 +363,11 @@
+ 439	common	faccessat2		sys_faccessat2
+ 440	common	process_madvise		sys_process_madvise
+ 
++501	common	kkv_init		sys_kkv_init
++502	common	kkv_destroy		sys_kkv_destroy
++503	common	kkv_put			sys_kkv_put
++504	common	kkv_get			sys_kkv_get
++
+ #
+ # Due to a historical design error, certain syscalls are numbered differently
+ # in x32 as compared to native x86_64.  These syscalls have numbers 512-547.
+diff --git a/linux/include/linux/syscalls.h b/linux/include/linux/syscalls.h
+index aea0ce9f3..c29ebf5d4 100644
+--- a/linux/include/linux/syscalls.h
++++ b/linux/include/linux/syscalls.h
+@@ -1253,6 +1253,10 @@ asmlinkage long sys_old_mmap(struct mmap_arg_struct __user *arg);
+  */
+ asmlinkage long sys_ni_syscall(void);
+ 
++asmlinkage long sys_kkv_init(int flags);
++asmlinkage long sys_kkv_destroy(int flags);
++asmlinkage long sys_kkv_put(uint32_t key, void *val, size_t size, int flags);
++asmlinkage long sys_kkv_get(uint32_t key, void *val, size_t size, int flags);
+ #endif /* CONFIG_ARCH_HAS_SYSCALL_WRAPPER */
+ 
+ 
+diff --git a/linux/include/uapi/asm-generic/unistd.h b/linux/include/uapi/asm-generic/unistd.h
+index 205631898..3b7fcd490 100644
+--- a/linux/include/uapi/asm-generic/unistd.h
++++ b/linux/include/uapi/asm-generic/unistd.h
+@@ -863,6 +863,18 @@ __SYSCALL(__NR_process_madvise, sys_process_madvise)
+ #undef __NR_syscalls
+ #define __NR_syscalls 441
+ 
++#define __NR_kkv_init 501
++__SYSCALL(__NR_kkv_init, sys_kkv_init)
++#define __NR_kkv_destroy 502
++__SYSCALL(__NR_kkv_destroy, sys_kkv_destroy)
++#define __NR_kkv_put 503
++__SYSCALL(__NR_kkv_put, sys_kkv_put)
++#define __NR_kkv_get 504
++__SYSCALL(__NR_kkv_get, sys_kkv_get)
++
++#undef __NR_syscalls
++#define __NR_syscalls (__NR_kkv_get + 1)
++
+ /*
+  * 32 bit systems traditionally used different
+  * syscalls for off_t and loff_t arguments, while
+diff --git a/linux/kernel/Makefile b/linux/kernel/Makefile
+index e7905bdf6..fdfaeb48e 100644
+--- a/linux/kernel/Makefile
++++ b/linux/kernel/Makefile
+@@ -10,7 +10,8 @@ obj-y     = fork.o exec_domain.o panic.o \
+ 	    extable.o params.o \
+ 	    kthread.o sys_ni.o nsproxy.o \
+ 	    notifier.o ksysfs.o cred.o reboot.o \
+-	    async.o range.o smpboot.o ucount.o regset.o
++	    async.o range.o smpboot.o ucount.o regset.o \
++	    kkv.o
+ 
+ obj-$(CONFIG_USERMODE_DRIVER) += usermode_driver.o
+ obj-$(CONFIG_MODULES) += kmod.o
+diff --git a/linux/kernel/kkv.c b/linux/kernel/kkv.c
+new file mode 100644
+index 000000000..1304f4193
+--- /dev/null
++++ b/linux/kernel/kkv.c
+@@ -0,0 +1,50 @@
++#include <linux/syscalls.h>
++#include <linux/printk.h>
++
++long (*kkv_init_ptr)(int flags) = NULL;
++EXPORT_SYMBOL(kkv_init_ptr);
++
++long (*kkv_destroy_ptr)(int flags) = NULL;
++EXPORT_SYMBOL(kkv_destroy_ptr);
++
++long (*kkv_put_ptr)(uint32_t key, void *val, size_t size, int flags) = NULL;
++EXPORT_SYMBOL(kkv_put_ptr);
++
++long (*kkv_get_ptr)(uint32_t key, void *val, size_t size, int flags) = NULL;
++EXPORT_SYMBOL(kkv_get_ptr);
++
++SYSCALL_DEFINE1(kkv_init, int, flags)
++{
++	if (kkv_init_ptr)
++		return kkv_init_ptr(flags);
++
++	pr_err("fridge module not running. init exiting.\n");
++	return -ENOSYS;
++}
++
++SYSCALL_DEFINE1(kkv_destroy, int, flags)
++{
++	if (kkv_destroy_ptr)
++		return kkv_destroy_ptr(flags);
++
++	pr_err("fridge module not running. destroy exiting.\n");
++	return -ENOSYS;
++}
++
++SYSCALL_DEFINE4(kkv_put, uint32_t, key, void *, val, size_t, size, int, flags)
++{
++	if (kkv_put_ptr)
++		return kkv_put_ptr(key, val, size, flags);
++
++	pr_err("fridge module not running. put exiting.\n");
++	return -ENOSYS;
++}
++
++SYSCALL_DEFINE4(kkv_get, uint32_t, key, void *, val, size_t, size, int, flags)
++{
++	if (kkv_get_ptr)
++		return kkv_get_ptr(key, val, size, flags);
++
++	pr_err("fridge module not running. get exiting.\n");
++	return -ENOSYS;
++}

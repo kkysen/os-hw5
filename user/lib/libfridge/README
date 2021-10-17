@@ -1,0 +1,62 @@
+libfridge
+=========
+
+A simple library that wraps system calls created for a kernel key-value store.
+
+Building libfridge
+------------------
+
+This library is built and installed using a custom Makefile.
+
+To this library:
+
+    $ make
+
+Then, to install this library:
+
+    # make install
+
+
+### Install destination
+
+This Makefile will install the library and headers to the path defined by
+`FRIDGE_DEST`. Specifically, the library will placed under `$(FRIDGE_DEST)/lib`,
+and the headers will be placed under `$(FRIDGE_DEST)/include`.
+
+By default, `FRIDGE_DEST` is set to `/usr/local`.
+
+The install location may be overridden by defining `FRIDGE_DEST` as an
+environment variable. For example:
+
+    $ FRIDGE_DEST=custom/path make install
+
+
+### Makefile
+
+Here are some useful targets defined in the Makefile:
+
+`make`/`make default`:  Defaults to `make build`
+
+`make build`:           Builds `libfridge.a`
+
+`make install`:         Installs `libfridge.a` and `fridge.h` to `FRIDGE_DEST`
+
+`make uninstall`:       Removes `libfridge.a` and `fridge.h` from `FRIDGE_DEST`
+
+`make clean`:           Removes build products
+
+`make help`:            Prints a list of useful PHONY targets
+
+
+How to Use
+----------
+Simply install the library include the header file: `#include <fridge.h>`.
+You must also link with the library: -lfridge. Because the header and
+library will be in system directories, you do not need to pass -I and -L
+flags to your compiler.
+
+
+Contact
+-------
+OS Mailing List <cs4118@lists.cs.columbia.edu>
+OS TA List      <cucs4118-tas@googlegroups.com>
