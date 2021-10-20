@@ -48,13 +48,14 @@ make-in dir *args:
 
 make-test *args: (make-in "user/test" args)
 
-make-mod *args: (make-in "user/module/supermom" args)
+make-mod *args:
+    #(make-in "user/module/supermom" args)
 
 make-non-kernel *args: (make-test args) (make-mod args)
 
 make-kernel *args: (make-in "linux" args)
 
-make-sys-supermom *args: (make-kernel "kernel/supermom.o" args)
+#make-sys-supermom *args: (make-kernel "kernel/supermom.o" args)
 
 # Paranthesized deps to avoid checkpatch repeated word warning
 make: (pre-make) (make-mod) (make-kernel)
