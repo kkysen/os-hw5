@@ -29,7 +29,7 @@ install-program-dependencies:
     cargo quickinstall gitui
 
 parallel-bash-commands:
-    rg '^(.*)$' --replace '$1 &' --color never
+    -rg '^(.*)$' --replace '$1 &' --color never
     echo wait
 
 sequential-bash:
@@ -39,7 +39,7 @@ parallel-bash:
     just parallel-bash-commands | bash
 
 map-lines pattern replacement:
-    rg '^{{pattern}}$' --replace '{{replacement}}' --color never
+    -rg '^{{pattern}}$' --replace '{{replacement}}' --color never
 
 pre-make:
 
