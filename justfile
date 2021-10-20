@@ -78,7 +78,11 @@ fmt-args *args:
 
 fmt: (fmt-args "-i")
 
-pre-commit: make fmt
+pre-commit-fast: fmt check-patch
+
+pre-commit-slow: make
+
+pre-commit: pre-commit-fast pre-commit-slow
 
 gitui: pre-commit
     gitui
