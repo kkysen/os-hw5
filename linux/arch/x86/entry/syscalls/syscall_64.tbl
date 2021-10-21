@@ -363,6 +363,11 @@
 439	common	faccessat2		sys_faccessat2
 440	common	process_madvise		sys_process_madvise
 
+501	common	kkv_init		sys_kkv_init
+502	common	kkv_destroy		sys_kkv_destroy
+503	common	kkv_put			sys_kkv_put
+504	common	kkv_get			sys_kkv_get
+
 #
 # Due to a historical design error, certain syscalls are numbered differently
 # in x32 as compared to native x86_64.  These syscalls have numbers 512-547.
