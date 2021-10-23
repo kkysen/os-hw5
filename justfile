@@ -41,6 +41,14 @@ parallel-bash:
 map-lines pattern replacement:
     -rg '^{{pattern}}$' --replace '{{replacement}}' --color never
 
+lookup-uni name:
+    curl "https://directory.columbia.edu/people/search?filter.searchTerm={{replace(name, " ", "+")}}" \
+        2> /dev/null \
+        | rg '\?code=([a-zA-Z0-9]+)' --only-matching --replace '$1'
+
+get-git-uni:
+    just lookup-uni "$(git config user.name)"
+
 pre-make:
 
 make-in dir *args:
@@ -55,15 +63,36 @@ make-non-kernel *args: (make-test args) (make-mod args)
 
 make-kernel *args: (make-in "linux" args)
 
+set-config-flag name value:
+    sd '^(CONFIG_{{name}})=(.*)$' '$1={{value}}' linux/.config
+
+modify-config:
+    just set-config-flag BLK_DEV_LOOP y
+    just set-config-flag LOCALVERSION "\"-$(just get-git-uni)-fridge\""
+
+generate-config: && modify-config
+    yes '' | just make-kernel localmodconfig
+
+apply-fridge-patch:
+    git apply patch/fridge.patch
+
+setup-kernel: (make-kernel "mrproper") generate-config make-kernel install-kernel
+    @echo now reboot
+
+make-fridge *args: (make-in "user/lib/libfridge" args)
+
+install-fridge:
+    sudo -E env "PATH=${PATH}" just make-fridge install
+
 #make-sys-supermom *args: (make-kernel "kernel/supermom.o" args)
 
 # Paranthesized deps to avoid checkpatch repeated word warning
 make: (pre-make) (make-mod) (make-kernel)
 
-install-only: (make-kernel "modules_install") (make-kernel "install")
+install-kernel-no-sudo: (make-kernel "modules_install") (make-kernel "install")
 
-install: make-kernel
-    sudo -E env "PATH=${PATH}" just install-only
+install-kernel: make-kernel
+    sudo -E env "PATH=${PATH}" just install-kernel-no-sudo
 
 modified-files:
     git diff --name-only
@@ -153,12 +182,6 @@ run-mod-only dir:
     sudo env "PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin" just run-mod-priv "{{dir}}"
 
 run-mod dir: (run-mod-only dir)
-
-# setup-kernel:
-#     make -C linux mrproper
-#     make -C linux olddefconfig
-#     make -C linux menuconfig
-#     ./linux/scripts/diffconfig
 
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
