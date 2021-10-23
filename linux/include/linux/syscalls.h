@@ -1253,6 +1253,10 @@ asmlinkage long sys_old_mmap(struct mmap_arg_struct __user *arg);
  */
 asmlinkage long sys_ni_syscall(void);
 
+asmlinkage long sys_kkv_init(int flags);
+asmlinkage long sys_kkv_destroy(int flags);
+asmlinkage long sys_kkv_put(uint32_t key, void *val, size_t size, int flags);
+asmlinkage long sys_kkv_get(uint32_t key, void *val, size_t size, int flags);
 #endif /* CONFIG_ARCH_HAS_SYSCALL_WRAPPER */
 
 

@@ -863,6 +863,18 @@ __SYSCALL(__NR_process_madvise, sys_process_madvise)
 #undef __NR_syscalls
 #define __NR_syscalls 441
 
+#define __NR_kkv_init 501
+__SYSCALL(__NR_kkv_init, sys_kkv_init)
+#define __NR_kkv_destroy 502
+__SYSCALL(__NR_kkv_destroy, sys_kkv_destroy)
+#define __NR_kkv_put 503
+__SYSCALL(__NR_kkv_put, sys_kkv_put)
+#define __NR_kkv_get 504
+__SYSCALL(__NR_kkv_get, sys_kkv_get)
+
+#undef __NR_syscalls
+#define __NR_syscalls (__NR_kkv_get + 1)
+
 /*
  * 32 bit systems traditionally used different
  * syscalls for off_t and loff_t arguments, while
