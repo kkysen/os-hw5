@@ -61,9 +61,11 @@ int kkv_get(uint32_t key, void *val, size_t size, int flags){
 
 	list_for_each_entry_safe(e, next, &buckets[bucket_num].entries, entries){
 		if(e->kv_pair.key == key){
+			//lock the spinlock
 			if (copy_to_user(val, e->kv_pair.val, size))
 				return -EFAULT;
 			list_del(&e->entries);
+			//unlock the spin lock?
 			kfree(e);
 		}
 	}
@@ -81,10 +83,12 @@ int kkv_put(uint32_t key, void *val, size_t size, int flags){
 			if(!e->kv_pair.val){
 				return -ENOMEM;
 			}
+			//grab the spin lock, can't do memory with it
 			if (copy_from_user(e->kv_pair.val, val, size))
 				return -EFAULT;
 
 			e->kv_pair.size = size;
+			//unlock the spinlock
 			return 0;
 		}
 	}
