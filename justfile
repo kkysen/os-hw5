@@ -77,8 +77,9 @@ set-config-flag name value:
     sd '^(CONFIG_{{name}})=(.*)$' '$1={{value}}' linux/.config
 
 modify-config:
-    just set-config-flag BLK_DEV_LOOP y
     just set-config-flag LOCALVERSION "\"-$(just get-git-uni)-fridge\""
+    just set-config-flag BLK_DEV_LOOP y
+    just set-config-flag SYSTEM_TRUSTED_KEYS ""
 
 generate-config: && modify-config
     yes '' | just make-kernel localmodconfig
