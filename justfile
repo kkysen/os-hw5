@@ -54,7 +54,7 @@ pre-make:
 make-with-makefile path *args:
     cd "{{parent_directory(path)}}" && make --makefile "{{file_name(path)}}" -j{{n_proc}} {{args}}
 
-make-in dir *args: (make-with-makefile dir + "/Makefile" args)
+make-in dir *args: (make-with-makefile join(dir, "Makefile") args)
 
 make-in-recursive dir *args:
     fd '^Makefile$' "{{dir}}" \
@@ -100,18 +100,18 @@ install-kernel-no-sudo: (make-kernel "modules_install") (make-kernel "install")
 install-kernel: make-kernel
     sudo -E env "PATH=${PATH}" just install-kernel-no-sudo
 
-modified-files:
-    git diff --name-only
+first-commit:
+    git rev-list --max-parents=0 HEAD
 
-fmt-commands *args:
-    just modified-files | rg '\.(c|h)$' \
-        | just map-lines '(.*)' 'clang-format {{args}} "$1"'
+modified-files *args:
+    git diff --name-only {{args}}
 
-fmt-args *args:
+fmt *args:
     ln --symbolic --force linux/.clang-format .
-    just fmt-commands {{args}} | just parallel-bash
+    git clang-format "$(just first-commit)" {{args}}
 
-fmt: (fmt-args "-i")
+entire-diff *args:
+    git diff "$(just first-commit)" {{args}}
 
 pre-commit-fast: fmt check-patch
 
