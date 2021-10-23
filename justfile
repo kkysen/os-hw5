@@ -51,15 +51,25 @@ get-git-uni:
 
 pre-make:
 
-make-in dir *args:
-    cd "{{dir}}" && make -j{{n_proc}} {{args}}
+make-with-makefile path *args:
+    cd "{{parent_directory(path)}}" && make --makefile "{{file_name(path)}}" -j{{n_proc}} {{args}}
 
-make-test *args: (make-in "user/test" args)
+make-in dir *args: (make-with-makefile dir + "/Makefile" args)
 
-make-mod *args:
-    #(make-in "user/module/supermom" args)
+make-in-recursive dir *args:
+    fd '^Makefile$' "{{dir}}" \
+        | just map-lines '(.*)' 'just make-with-makefile "$1" {{args}}' \
+        | just parallel-bash
 
-make-non-kernel *args: (make-test args) (make-mod args)
+make-lib *args: (make-in-recursive "user/lib" args)
+
+make-mods *args: (make-in-recursive "user/module" args)
+
+make-test *args: (make-in-recursive "user/test" args)
+
+make-user *args: (make-in-recursive "user/" args)
+
+make-non-kernel *args: (make-user args)
 
 make-kernel *args: (make-in "linux" args)
 
@@ -79,15 +89,11 @@ apply-fridge-patch:
 setup-kernel: (make-kernel "mrproper") generate-config make-kernel install-kernel
     @echo now reboot
 
-make-fridge *args: (make-in "user/lib/libfridge" args)
-
 install-fridge:
     sudo -E env "PATH=${PATH}" just make-fridge install
 
-#make-sys-supermom *args: (make-kernel "kernel/supermom.o" args)
-
 # Paranthesized deps to avoid checkpatch repeated word warning
-make: (pre-make) (make-mod) (make-kernel)
+make: (pre-make) (make-non-kernel) (make-kernel)
 
 install-kernel-no-sudo: (make-kernel "modules_install") (make-kernel "install")
 
@@ -116,7 +122,7 @@ pre-commit: pre-commit-fast pre-commit-slow
 gitui: pre-commit
     gitui
 
-compile-commands-mod: (make-non-kernel "clean")
+compile-commands-non-kernel: (make-non-kernel "clean")
     cd user && bear -- just make-non-kernel
     command -v ccache > /dev/null \
         && sd "$(which ccache)" "$(which gcc)" user/compile_commands.json \
@@ -156,7 +162,7 @@ join-compile-commands *dirs:
         process.exit(1);
     });
 
-compile-commands: compile-commands-mod compile-commands-kernel (join-compile-commands "user" "linux")
+compile-commands: compile-commands-non-kernel compile-commands-kernel (join-compile-commands "user" "linux")
 
 log *args:
     sudo dmesg --kernel --reltime {{args}}
