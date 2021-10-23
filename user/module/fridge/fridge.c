@@ -55,12 +55,21 @@ int kkv_destroy(int flags){
 
 int kkv_get(uint32_t key, void *val, size_t size, int flags){
 
-	//buffer
-	//look for in list 
+	int bucket_num = key % HASH_TABLE_LENGTH;
+	struct kkv_ht_entry *e;
+	struct kkv_ht_entry *next;
 
-	//copy into buffer
+	list_for_each_entry_safe(e, next, &buckets[bucket_num].entries, entries){
+		if(e->kv_pair.key == key){
+			if (copy_to_user(val, e->kv_pair.val, size))
+				return -EFAULT;
+			list_del(&e->entries);
+			kfree(e);
+		}
+	}
 	return 0;
 }
+
 int kkv_put(uint32_t key, void *val, size_t size, int flags){
 
 	int bucket_num = key % HASH_TABLE_LENGTH;
@@ -72,9 +81,8 @@ int kkv_put(uint32_t key, void *val, size_t size, int flags){
 			if(!e->kv_pair.val){
 				return -ENOMEM;
 			}
-			if(copy_from_user(e->kv_pair.val, val, size) != 0){
+			if (copy_from_user(e->kv_pair.val, val, size))
 				return -EFAULT;
-			}
 
 			e->kv_pair.size = size;
 			return 0;
@@ -85,9 +93,9 @@ int kkv_put(uint32_t key, void *val, size_t size, int flags){
 	if(!e){
 		return -ENOMEM;
 	}
-	if(copy_from_user(e->kv_pair.val, val, size) != 0){
+	if (copy_from_user(e->kv_pair.val, val, size))
 		return -EFAULT;
-	}
+
 	e->kv_pair.key = key;
 	e->kv_pair.size = size;
 	list_add(&e->entries, &buckets[bucket_num].entries);
