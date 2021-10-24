@@ -223,21 +223,23 @@ test: make-test
     -just diff {expected,actual}.$PPID.log
     rm {expected,actual}.$PPID.log
 
-is-mod-loaded name:
+default_mod_path := "user/module/fridge/fridge.ko"
+
+is-mod-loaded name=file_stem(default_mod_path):
     rg --quiet '^{{name}} ' /proc/modules
 
 # `path` is `path_` instead to appease checkpatch's repeated word warning
-is-mod-loaded-by-path path_: (is-mod-loaded file_stem(path_))
+is-mod-loaded-by-path path_=default_mod_path: (is-mod-loaded file_stem(path_))
 
-load-mod path:
+load-mod path=default_mod_path:
     just unload-mod-by-path "{{path}}"
     sudo insmod "{{path}}"
 
-unload-mod name:
+unload-mod name=file_stem(default_mod_path):
     just is-mod-loaded "{{name}}" 2> /dev/null && sudo rmmod "{{name}}" || true
 
 # `path` is `path_` instead to appease checkpatch's repeated word warning
-unload-mod-by-path path_: (unload-mod file_stem(path_))
+unload-mod-by-path path_=default_mod_path: (unload-mod file_stem(path_))
 
 check-patch:
     ./run_checkpatch.sh
