@@ -92,20 +92,22 @@ static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 }
 
 static long kkv_pair_copy_to_user(struct kkv_pair *this, void *user_val,
-				  size_t size)
+				  size_t user_size)
 {
-	/* The user tried to copy extra bytes from kernel. */
-	if (size > this->size)
+	/* The user tried to copy more bytes from kernel, just truncate it.
+	 * If the user copies fewer bytes, return what they asked for,
+	 * even though there's more data.
+	 */
+	if (copy_to_user(user_val, this->val, min(this->size, user_size)) !=
+	    0) {
 		return -EFAULT;
-	/* If the user copies fewer bytes, that's okay, though they may run into problems. */
-	if (copy_to_user(user_val, this->val, this->size) != 0)
-		return -EFAULT;
+	}
 	return 0;
 }
 
 static void kkv_ht_entry_init(struct kkv_ht_entry *this)
 {
-	/* `this->entries` freed by container. */
+	INIT_LIST_HEAD(&this->entries);
 	kkv_pair_init(&this->kv_pair);
 	/* `this->q` unused until part 4. */
 	/* `this->q_count` unused until part 4. */
@@ -207,7 +209,7 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 }
 
 static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
-		     size_t size, int flags)
+		     size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
@@ -219,7 +221,7 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		return -ENOSYS;
 
 	/* Allocates, so put it before critical section. */
-	e = kkv_pair_init_from_user(&pair, key, user_val, size);
+	e = kkv_pair_init_from_user(&pair, key, user_val, user_size);
 	if (e < 0)
 		return e;
 
@@ -256,8 +258,8 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	return 0;
 }
 
-static long kkv_get_(struct kkv *this, u32 key, void *user_val, size_t size,
-		     int flags)
+static long kkv_get_(struct kkv *this, u32 key, void *user_val,
+		     size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
@@ -285,7 +287,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val, size_t size,
 	if (!entry)
 		return -ENOENT;
 
-	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, size);
+	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
 	/* Free before returning the error. */
 	kkv_ht_entry_free(entry);
 	if (e < 0)
@@ -357,9 +359,9 @@ static long kkv_destroy(int flags)
  * The result of calling kkv_put() before initializing the Kernel
  * Key-Value store is undefined.
  */
-static long kkv_put(u32 key, const void *user_val, size_t size, int flags)
+static long kkv_put(u32 key, const void *val, size_t size, int flags)
 {
-	return kkv_put_(&kkv, key, user_val, size, flags);
+	return kkv_put_(&kkv, key, val, size, flags);
 }
 
 /*
@@ -380,7 +382,7 @@ static long kkv_put(u32 key, const void *user_val, size_t size, int flags)
  * The result of calling kkv_get() before initializing the Kernel Key-Value
  * store is undefined.
  */
-static long kkv_get(u32 key, void *user_val, size_t size, int flags)
+static long kkv_get(u32 key, void *val, size_t size, int flags)
 {
-	return kkv_get_(&kkv, key, user_val, size, flags);
+	return kkv_get_(&kkv, key, val, size, flags);
 }
