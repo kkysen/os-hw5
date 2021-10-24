@@ -163,7 +163,7 @@ join-compile-commands *dirs:
         process.exit(1);
     });
 
-compile-commands: compile-commands-non-kernel compile-commands-kernel (join-compile-commands "user" "linux")
+compile-commands: compile-commands-non-kernel compile-commands-kernel (join-compile-commands "user")
 
 log *args:
     sudo dmesg --kernel --reltime {{args}}
