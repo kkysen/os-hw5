@@ -218,7 +218,7 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	bool adding;
 
 	if (flags != 0)
-		return -ENOSYS;
+		return -EINVAL;
 
 	/* Allocates, so put it before critical section. */
 	e = kkv_pair_init_from_user(&pair, key, user_val, user_size);
@@ -266,7 +266,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	struct kkv_ht_entry *entry;
 
 	if (flags != KKV_NONBLOCK)
-		return -ENOSYS;
+		return -EINVAL;
 
 	bucket = kkv_get_bucket(this, key);
 
@@ -311,7 +311,7 @@ static struct kkv kkv;
 static long kkv_init(int flags)
 {
 	if (flags != 0)
-		return -ENOSYS;
+		return -EINVAL;
 
 	kkv_init_(&kkv);
 
@@ -334,7 +334,7 @@ static long kkv_init(int flags)
 static long kkv_destroy(int flags)
 {
 	if (flags != 0)
-		return -ENOSYS;
+		return -EINVAL;
 
 	kkv_free(&kkv);
 
