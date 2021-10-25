@@ -16,10 +16,13 @@ from libfridge import (
     KKV_NONBLOCK,
 )
 
-error_name_map: Mapping[int, str] = {value: name for name, value in errno.__dict__.items() if name.startswith("E")}
+error_name_map: Mapping[int, str] = {
+    value: name for name, value in errno.__dict__.items() if name.startswith("E")}
+
 
 def assert_errno_eq(actual: int, expected: int):
     assert actual == expected, f"{error_name_map[actual]} != {error_name_map[expected]}"
+
 
 KEY = 1
 
@@ -65,15 +68,13 @@ def len_test():
 def get_and_put_test(i: int):
     key = KEY
     value = "TESTING"
-    if i % 2 == 0:
-        response = kkv_get(key=key, len=len(value), flags=KKV_NONBLOCK)
-        assert response == value
-    else:
-        kkv_put(key=key, value=value, flags=KKV_NONBLOCK)
+    kkv_put(key=key, value=value, flags=KKV_NONBLOCK)
+    response = kkv_get(key=key, len=len(value), flags=KKV_NONBLOCK)
+    assert response == value
 
 
 def get_and_put_parallel_test():
-    num_processes = 10
+    num_processes = 100
     with Pool(processes=num_processes) as pool:
         pool.map(get_and_put_test, range(num_processes))
 
