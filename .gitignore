@@ -1,0 +1,8 @@
+compile_commands.json
+/.clang-format
+.vscode/
+.gdb_history
+
+# Common editor swap files
+.*.swp
+*~
