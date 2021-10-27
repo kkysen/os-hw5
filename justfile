@@ -114,7 +114,7 @@ fmt *args:
 entire-diff *args:
     git diff "$(just first-commit)" {{args}}
 
-pre-commit-fast: fmt check-patch
+pre-commit-fast: check-patch
 
 pre-commit-slow: make
 
