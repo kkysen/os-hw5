@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
+
 import errno
 from typing import Callable, Mapping, Sequence
 import sys
 from multiprocessing import Pool
-from errno import EINVAL
+from errno import EINVAL, ENOENT
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent / "py-in-fridge"))
@@ -62,6 +64,14 @@ def len_test():
     # testing with asking for more length than we put in
     kkv_put(key, value, KKV_NONBLOCK)
     response = kkv_get(key, 30, KKV_NONBLOCK)
+
+
+def get_and_put_separate_key(i: int):
+    key = i
+    value = "hello world\n" * i
+    print(f"key = {key}")
+    kkv_put(key=key, value=value, flags=KKV_NONBLOCK)
+    response = kkv_get(key=key, len=len(value), flags=KKV_NONBLOCK)
     assert response == value
 
 
@@ -72,11 +82,17 @@ def get_and_put_test(i: int):
     response = kkv_get(key=key, len=len(value), flags=KKV_NONBLOCK)
     assert response == value
 
+def put_and_get_other():
+    kkv_put(key=0, value="hello", flags=KKV_NONBLOCK)
+    try:
+        kkv_get(key=1, len=len("world"), flags=KKV_NONBLOCK)
+    except OSError as e:
+        assert_errno_eq(e.errno, ENOENT)
 
-def get_and_put_parallel_test():
-    num_processes = 100
-    with Pool(processes=num_processes) as pool:
-        pool.map(get_and_put_test, range(num_processes))
+
+def parallel_tests(n: int, f: Callable[[int], None]):
+    with Pool(processes=n) as pool:
+        pool.map(f, range(n))
 
 
 def main():
@@ -86,8 +102,10 @@ def main():
         len_test()
         get_and_put_test(1)
         get_and_put_test(2)
-        get_and_put_parallel_test()
+        put_and_get_other()
+        parallel_tests(n=17, f=get_and_put_separate_key)
     finally:
+        print("destroy")
         kkv_destroy()
 
 
