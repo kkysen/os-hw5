@@ -146,40 +146,64 @@ static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 	/* spinlocks don't need to be freed */
 }
 
-#define HASH_TABLE_LENGTH_BITS 5
-
-struct kkv {
-	struct kkv_ht_bucket buckets[HASH_TABLE_LENGTH];
+struct kkv_buckets {
+	struct kkv_ht_bucket *ptr;
+	size_t len;
+	u8 len_bits;
 };
 
-static void kkv_for__each_bucket(struct kkv *this,
-				 void (*f)(struct kkv_ht_bucket *bucket))
+static void kkv_buckets_for__each(struct kkv_buckets *this,
+				  void (*f)(struct kkv_ht_bucket *bucket))
 {
 	size_t i;
 
-	for (i = 0; i < ARRAY_SIZE(this->buckets); i++)
-		f(&this->buckets[i]);
+	for (i = 0; i < this->len; i++)
+		f(&this->ptr[i]);
 }
 
-static void kkv_init_(struct kkv *this)
+static u8 num_bits_used(size_t n)
 {
-	kkv_for__each_bucket(this, kkv_ht_bucket_init);
+	const u8 max_bits = sizeof(n) * __CHAR_BIT__;
+	u8 num_bits;
+
+	for (num_bits = 0; num_bits < max_bits; num_bits++) {
+		if (((1 << num_bits) - 1) >= n)
+			return num_bits;
+	}
+	return max_bits;
 }
 
-static void kkv_free(struct kkv *this)
+static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 {
-	kkv_for__each_bucket(this, kkv_ht_bucket_free);
+	this->ptr = kmalloc_array(len, sizeof(*this->ptr), GFP_KERNEL);
+	if (!this->ptr) {
+		this->len = 0;
+		this->len_bits = 0;
+		return -ENOMEM;
+	}
+	this->len = len;
+	this->len_bits = num_bits_used(len);
+	kkv_buckets_for__each(this, kkv_ht_bucket_init);
+	return 0;
 }
 
-static u32 kkv_bucket_index(const struct kkv *this, u32 key)
+static void kkv_buckets_free(struct kkv_buckets *this)
 {
-	BUILD_BUG_ON(ARRAY_SIZE(this->buckets) > (1 << HASH_TABLE_LENGTH_BITS));
-	return hash_32(key, HASH_TABLE_LENGTH_BITS) % ARRAY_SIZE(this->buckets);
+	kkv_buckets_for__each(this, kkv_ht_bucket_free);
+	this->len_bits = 0;
+	this->len = 0;
+	kfree(this->ptr);
+	this->ptr = NULL;
 }
 
-static struct kkv_ht_bucket *kkv_get_bucket(struct kkv *this, u32 key)
+static u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
 {
-	return &this->buckets[kkv_bucket_index(this, key)];
+	return hash_32(key, this->len_bits) % this->len;
+}
+
+static struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this, u32 key)
+{
+	return &this->ptr[kkv_buckets_index(this, key)];
 }
 
 static struct kkv_ht_entry *kkv_ht_bucket_find(const struct kkv_ht_bucket *this,
@@ -208,6 +232,26 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 	list_del(&entry->entries);
 }
 
+struct kkv {
+	struct kkv_buckets buckets;
+};
+
+static long kkv_init_(struct kkv *this, size_t len)
+{
+	long e;
+
+	e = kkv_buckets_init(&this->buckets, len);
+	if (e < 0)
+		return e;
+
+	return 0;
+}
+
+static void kkv_free(struct kkv *this)
+{
+	kkv_buckets_free(&this->buckets);
+}
+
 static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		     size_t user_size, int flags)
 {
@@ -231,15 +275,18 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	 * At least this will be more efficient with a slab cache later.
 	 */
 	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-	if (!new_entry)
+	if (!new_entry) {
+		kkv_pair_free(&pair);
 		return -ENOMEM;
+	}
 
-	bucket = kkv_get_bucket(this, key);
+	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
 		/* Critical section: no allocs. */
 		struct kkv_ht_entry *entry;
+		struct kkv_pair tmp;
 
 		entry = kkv_ht_bucket_find(bucket, key);
 		adding = !entry;
@@ -248,12 +295,15 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 			kkv_ht_entry_init(entry);
 			kkv_ht_bucket_add(bucket, entry);
 		}
+		tmp = entry->kv_pair;
 		entry->kv_pair = pair;
+		pair = tmp;
 	}
 	spin_unlock(&bucket->lock);
 
 	if (!adding)
 		kfree(new_entry);
+	kkv_pair_free(&pair);
 
 	return 0;
 }
@@ -268,7 +318,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	if (flags != KKV_NONBLOCK)
 		return -EINVAL;
 
-	bucket = kkv_get_bucket(this, key);
+	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
@@ -290,6 +340,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
 	/* Free before returning the error. */
 	kkv_ht_entry_free(entry);
+	kfree(entry);
 	if (e < 0)
 		return e;
 
@@ -310,10 +361,14 @@ static struct kkv kkv;
  */
 static long kkv_init(int flags)
 {
+	long e;
+
 	if (flags != 0)
 		return -EINVAL;
 
-	kkv_init_(&kkv);
+	e = kkv_init_(&kkv, HASH_TABLE_LENGTH);
+	if (e < 0)
+		return e;
 
 	return 0;
 }
