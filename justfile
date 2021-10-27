@@ -170,14 +170,14 @@ log *args:
 
 log-watch *args: (log "--follow-new" args)
 
-run-mod-priv dir:
+run-mod-priv mod_path *args:
     #!/usr/bin/env bash
-    cd "{{dir}}"
     just log | wc -l > log.length
-    #kedr start *.ko
-    echo "running $(tput setaf 2){{dir}}$(tput sgr 0):"
-    insmod *.ko
-    rmmod *.ko
+    kedr start "{{mod_path}}"
+    echo "running $(tput setaf 2){{file_stem(mod_path)}}$(tput sgr 0):"
+    just load-mod "{{mod_path}}"
+    {{args}}
+    just unload-mod-by-path "{{mod_path}}"
     just log --color=always | tail -n "+$(($(cat log.length) + 1))"
     rm log.length
     exit
@@ -185,10 +185,10 @@ run-mod-priv dir:
     bat --paging never info possible_leaks unallocated_frees
     kedr stop
 
-run-mod-only dir:
-    sudo env "PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin" just run-mod-priv "{{dir}}"
+run-mod-only mod_path *args:
+    sudo env "PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin" just run-mod-priv "{{mod_path}}" {{args}}
 
-run-mod dir: (run-mod-only dir)
+run-mod mod_path *args: (run-mod-only mod_path args)
 
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
