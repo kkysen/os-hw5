@@ -6,6 +6,7 @@ import sys
 from multiprocessing import Pool
 from errno import EINVAL, ENOENT
 from pathlib import Path
+import time
 
 sys.path.append(str(Path(__file__).parent.parent / "py-in-fridge"))
 
@@ -69,9 +70,13 @@ def len_test():
 def get_and_put_separate_key(i: int):
     key = i
     value = "hello world\n" * i
-    print(f"key = {key}")
+    #print(f"key = {key}")
     kkv_put(key=key, value=value, flags=KKV_NONBLOCK)
+    # try:
     response = kkv_get(key=key, len=len(value), flags=KKV_NONBLOCK)
+    # except OSError as e:
+        # assert_errno_eq(e.errno, ENOENT)
+        # return
     assert response == value
 
 
@@ -90,21 +95,32 @@ def put_and_get_other():
         assert_errno_eq(e.errno, ENOENT)
 
 
-def parallel_tests(n: int, f: Callable[[int], None]):
-    with Pool(processes=n) as pool:
-        pool.map(f, range(n))
+def parallel_tests(num_procs: int, num_reps: int, f: Callable[[int], None]):
+    with Pool(processes=num_procs) as pool:
+        pool.map(f, range(num_reps))
+
+
+def put_a_lot(n: int):
+    for i in range(n):
+        key = i
+        value = "hello world\n" * i
+        kkv_put(key=key, value=value, flags=KKV_NONBLOCK)
 
 
 def main():
-    unknown_flags_test()
+    #unknown_flags_test()
+    kkv_init()
+    put_a_lot(n=10)
+    kkv_destroy()
     kkv_init()
     try:
         len_test()
         get_and_put_test(1)
         get_and_put_test(2)
         put_and_get_other()
-        parallel_tests(n=17, f=get_and_put_separate_key)
+        parallel_tests(num_procs=17, num_reps=100, f=get_and_put_separate_key)
     finally:
+        time.sleep(0.1)
         print("destroy")
         kkv_destroy()
 
