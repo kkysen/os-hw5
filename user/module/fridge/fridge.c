@@ -121,25 +121,6 @@ static void kkv_ht_entry_free(struct kkv_ht_entry *this)
 	/* `this->entries` freed by container. */
 }
 
-static u32 check_bucket_count(struct kkv_ht_bucket *this, const char *func,
-			      u32 line)
-{
-	struct kkv_ht_entry *entry;
-	u32 n;
-
-	n = 0;
-	list_for_each_entry(entry, &this->entries, entries) {
-		n++;
-	}
-
-	if (n != this->count)
-		pr_info("counts out of sync in %s:%u: count set as %u but actually %u\n",
-			func, line, this->count, n);
-	return n;
-}
-
-#define check_bucket_count(this) check_bucket_count(this, __func__, __LINE__)
-
 static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 {
 	*this = (struct kkv_ht_bucket){
@@ -147,7 +128,6 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 		.entries = LIST_HEAD_INIT(this->entries),
 		.count = 0,
 	};
-	check_bucket_count(this);
 }
 
 static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
@@ -155,17 +135,12 @@ static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 	struct kkv_ht_entry *entry;
 	struct kkv_ht_entry *tmp;
 
-	check_bucket_count(this);
 	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
 		kfree(entry);
 		this->count--;
 	}
-	check_bucket_count(this);
-
-	if (!list_empty(&this->entries) || this->count != 0)
-		pr_info("entries still left\n");
 
 	/* spinlocks don't need to be freed */
 }
@@ -245,25 +220,15 @@ static struct kkv_ht_entry *kkv_ht_bucket_find(const struct kkv_ht_bucket *this,
 static void kkv_ht_bucket_add(struct kkv_ht_bucket *this,
 			      struct kkv_ht_entry *entry)
 {
-	u32 before;
-	u32 after;
-
-	before = this->count;
-	check_bucket_count(this);
 	list_add(&entry->entries, &this->entries);
 	this->count++;
-	after = this->count;
-	check_bucket_count(this);
-	pr_info("before: %u, after: %u\n", before, after);
 }
 
 static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 				 struct kkv_ht_entry *entry)
 {
-	check_bucket_count(this);
 	this->count--;
 	list_del(&entry->entries);
-	check_bucket_count(this);
 }
 
 struct kkv {
@@ -286,34 +251,6 @@ static void kkv_free(struct kkv *this)
 	kkv_buckets_free(&this->buckets);
 }
 
-static atomic64_t get_put_count;
-
-static void dbg_bucket(struct kkv *this, u32 key, const char *func,
-		       u32 threshold, u64 count)
-{
-	u32 i;
-	struct kkv_ht_bucket *bucket;
-	u32 n;
-
-	return;
-
-	i = kkv_buckets_index(&this->buckets, key);
-	bucket = kkv_buckets_get(&this->buckets, key);
-	n = bucket->count;
-	if (n < threshold)
-		return;
-	pr_info("[%4llu] %s(): key: %4u, bucket: %2u, entry count: %2u\n",
-		count, func, key, i, n);
-}
-
-static void dbg_mem(u64 count, const void *ptr, bool alloc /*or free*/,
-		    const char *name, const char *func)
-{
-	return;
-	pr_info("[%4llu] %8s(): %5s %5s: 0x%lx\n", count, func,
-		alloc ? "alloc" : "free", name, (unsigned long)ptr);
-}
-
 static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		     size_t user_size, int flags)
 {
@@ -322,9 +259,6 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	struct kkv_ht_entry *new_entry;
 	struct kkv_pair pair;
 	bool adding;
-	u64 count;
-
-	count = (u64)atomic64_inc_return(&get_put_count);
 
 	if (flags != 0)
 		return -EINVAL;
@@ -333,7 +267,6 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	e = kkv_pair_init_from_user(&pair, key, user_val, user_size);
 	if (e < 0)
 		return e;
-	dbg_mem(count, pair.val, true, "value", __func__);
 
 	/* Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
 	 * and we don't know if we need to alloc until we see if the entry is already there,
@@ -341,14 +274,11 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	 * At least this will be more efficient with a slab cache later.
 	 */
 	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-	dbg_mem(count, new_entry, true, "entry", __func__);
 	if (!new_entry) {
-		dbg_mem(count, pair.val, false, "value", __func__);
 		kkv_pair_free(&pair);
 		return -ENOMEM;
 	}
 
-	dbg_bucket(this, key, __func__, 1, count);
 	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
@@ -370,11 +300,8 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	spin_unlock(&bucket->lock);
 
-	if (!adding) {
-		dbg_mem(count, new_entry, false, "entry", __func__);
+	if (!adding)
 		kfree(new_entry);
-	}
-	dbg_mem(count, pair.val, false, "value", __func__);
 	kkv_pair_free(&pair);
 
 	return 0;
@@ -386,14 +313,10 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	long e;
 	struct kkv_ht_bucket *bucket;
 	struct kkv_ht_entry *entry;
-	u64 count;
-
-	count = (u64)atomic64_inc_return(&get_put_count);
 
 	if (flags != KKV_NONBLOCK)
 		return -EINVAL;
 
-	dbg_bucket(this, key, __func__, 2, count);
 	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
@@ -415,9 +338,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
 	/* Free before returning the error. */
-	dbg_mem(count, entry->kv_pair.val, false, "value", __func__);
 	kkv_ht_entry_free(entry);
-	dbg_mem(count, entry, false, "entry", __func__);
 	kfree(entry);
 	if (e < 0)
 		return e;
