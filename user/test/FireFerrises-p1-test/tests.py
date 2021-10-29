@@ -6,7 +6,6 @@ import sys
 from multiprocessing import Pool
 from errno import EINVAL, ENOENT
 from pathlib import Path
-import time
 
 sys.path.append(str(Path(__file__).parent.parent / "py-in-fridge"))
 
@@ -120,8 +119,6 @@ def main():
         put_and_get_other()
         parallel_tests(num_procs=17, num_reps=100, f=get_and_put_separate_key)
     finally:
-        time.sleep(0.1)
-        print("destroy")
         kkv_destroy()
 
 

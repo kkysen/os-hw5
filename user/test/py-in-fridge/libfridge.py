@@ -16,8 +16,10 @@ from ctypes import (
 KKV_NONBLOCK = 0
 KKV_BLOCK = 1
 
-__NR_kkv_init, __NR_kkv_destroy = 501, 502
-__NR_kkv_put, __NR_kkv_get = 503, 504
+__NR_kkv_init = 501
+__NR_kkv_destroy = 502
+__NR_kkv_put = 503
+__NR_kkv_get = 504
 
 BUF_SIZE = 1024
 ENCODING = 'UTF-8'
