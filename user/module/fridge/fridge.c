@@ -286,9 +286,8 @@ static long kkv_free(struct kkv *this)
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
-	if (e < 0){
+	if (e < 0)
 		return e;
-	}
 	kkv_buckets_free(&this->buckets);
 	write_unlock(&this->lock);
 
