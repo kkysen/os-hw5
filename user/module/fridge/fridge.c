@@ -286,8 +286,9 @@ static long kkv_free(struct kkv *this)
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
-	if (e < 0)
+	if (e < 0){
 		return e;
+	}
 	kkv_buckets_free(&this->buckets);
 	write_unlock(&this->lock);
 
@@ -322,6 +323,12 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		return -ENOMEM;
 	}
 
+	/*check to ensure no read or write*/
+	e = kkv_lock(this, /* write */ false, /* expect init */ true);
+	if (e < 0)
+		return e;
+	read_lock(&this->lock);
+
 	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
@@ -342,6 +349,7 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		pair = tmp;
 	}
 	spin_unlock(&bucket->lock);
+	read_unlock(&this->lock);
 
 	if (!adding)
 		kfree(new_entry);
@@ -362,6 +370,13 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	bucket = kkv_buckets_get(&this->buckets, key);
 
+	//check to ensure no read or write
+	e = kkv_lock(this, /* write */ false, /* expect init */ true);
+	if (e < 0)
+		return e;
+
+	read_lock(&this->lock);
+
 	spin_lock(&bucket->lock);
 	{
 		/* Critical section: no allocs. */
@@ -375,6 +390,7 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		}
 	}
 	spin_unlock(&bucket->lock);
+	read_unlock(&this->lock);
 
 	if (!entry)
 		return -ENOENT;
