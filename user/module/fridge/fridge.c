@@ -233,22 +233,65 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 
 struct kkv {
 	struct kkv_buckets buckets;
+	rwlock_t lock; /* guards buckets (buckets.ptr) */
 };
+
+static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
+{
+	if (!!this->buckets.ptr ^ expecting_initialized) {
+		/**
+		 * Already initialized.
+		 * First check before lock so we avoid lock in most cases.
+		 */
+		return -EPERM;
+	}
+	if (!(write ? write_trylock(&this->lock) : read_trylock(&this->lock))) {
+		/**
+		 * If we can't get the lock,
+		 * then init or destroy are being called currently,
+		 * which is not when you're supposed to call anything else.
+		 */
+		return -EPERM;
+	}
+	if (!!this->buckets.ptr ^ expecting_initialized) {
+		/**
+		 * Already initialized.
+		 * Second real check while holding lock.
+		 */
+		write ? write_unlock(&this->lock) : read_unlock(&this->lock);
+		return -EPERM;
+	}
+	return 0;
+}
 
 static long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
 
-	e = kkv_buckets_init(&this->buckets, len);
+	e = 0;
+
+	e = kkv_lock(this, /* write */ true, /* expect init */ false);
 	if (e < 0)
 		return e;
+	e = kkv_buckets_init(&this->buckets, len);
+	write_unlock(&this->lock);
 
-	return 0;
+	return e;
 }
 
-static void kkv_free(struct kkv *this)
+static long kkv_free(struct kkv *this)
 {
+	long e;
+
+	e = 0;
+
+	e = kkv_lock(this, /* write */ true, /* expect init */ false);
+	if (e < 0)
+		return e;
 	kkv_buckets_free(&this->buckets);
+	write_unlock(&this->lock);
+
+	return e;
 }
 
 static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
