@@ -107,14 +107,51 @@ first-commit:
 modified-files *args:
     git diff --name-only {{args}}
 
+# clang-format formats some stuff wrong, so re-format it
+# specifically for each macros
+refmt *paths:
+    #!/usr/bin/env node
+    const fsp = require("fs/promises");
+    const pathLib = require("path");
+
+    async function reformatCFile(path) {
+        let s = await fsp.readFile(path);
+        s = s.toString();
+        const original = s;
+        s = s.replaceAll(/([a-z_]*for_each[a-z_]*) /g, (_, macroName) => macroName);
+        const to = s;
+        await fsp.writeFile(path, s);
+        return s !== original;
+    }
+
+    async function main() {
+        // const [_node, _program, ...paths] = process.argv;
+        const pathsGiven = `{{paths}}`.split(" ");
+        let it = pathsGiven;
+        it = it.filter(path => ["c", "h"].includes(pathLib.extname(path).slice(1)));
+        it = [...new Set(it)];
+        const pathsFormatting = it;
+        console.log(["reformatting:", ...pathsFormatting].join("\n\t"));
+        it = it.map(async (path, i) => ({path, formatted: await reformatCFile(path)}));
+        it = await Promise.all(it);
+        const pathsFormatted = it.filter(e => e.formatted).map(e => e.path);
+        console.log(["reformatted:", ...pathsFormatted].join("\n\t"));
+    }
+
+    main().catch(e => {
+        console.error(e);
+        process.exit(1);
+    });
+
 fmt *args:
     ln --symbolic --force linux/.clang-format .
-    git clang-format "$(just first-commit)" {{args}}
+    git clang-format --force "$(just first-commit)" {{args}}
+    just refmt $(just modified-files "$(just first-commit)")
 
 entire-diff *args:
     git diff "$(just first-commit)" {{args}}
 
-pre-commit-fast: check-patch
+pre-commit-fast: fmt check-patch
 
 pre-commit-slow: make
 
