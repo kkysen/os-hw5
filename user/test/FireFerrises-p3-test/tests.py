@@ -137,7 +137,7 @@ def put_after_destroy():
     except OSError as e:
         assert_errno_eq(e.errno, EPERM)
 
-#Test 8: Call destory() twice
+#Test 8: Call destroy() twice
 def destroy_twice():
     kkv_init()
     kkv_destroy()
