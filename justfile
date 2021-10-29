@@ -190,6 +190,8 @@ run-mod-only mod_path *args:
 
 run-mod mod_path *args: (run-mod-only mod_path args)
 
+test *args: (run-mod default_mod_path args)
+
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
 
@@ -211,17 +213,6 @@ diff-command:
 
 diff a b:
     "$(just diff-command)" "{{a}}" "{{b}}"
-
-test: make-test
-    just log --color=never | wc -l > log.$PPID.length
-    -just make-test run --silent > expected.$PPID.log
-    just log --color=never \
-        | rg '^\[[^\]]*\] (.*)$' --replace '$1' \
-        | tail -n "+$(($(cat log.$PPID.length) + 1))" \
-        > actual.$PPID.log
-    rm log.$PPID.length
-    -just diff {expected,actual}.$PPID.log
-    rm {expected,actual}.$PPID.log
 
 default_mod_path := "user/module/fridge/fridge.ko"
 
