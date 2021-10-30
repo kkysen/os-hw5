@@ -259,6 +259,8 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		e = -EPERM;
 		goto unlock;
 	}
+	goto ret;
+
 unlock:
 	write ? write_unlock(&this->lock) : read_unlock(&this->lock);
 ret:
