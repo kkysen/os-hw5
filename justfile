@@ -406,3 +406,10 @@ trace-exec *args:
     -strace -etrace=execve -f --string-limit 10000 -qq --output strace.$PPID.out {{args}}
     just filter-exec < strace.$PPID.out
     rm strace.$PPID.out
+
+rename-branch old_name new_name:
+    git checkout "{{old_name}}"
+    git branch --move "{{new_name}}"
+    git push origin --set-upstream "{{new_name}}"
+    git push origin --delete "{{old_name}}"
+    git checkout -
