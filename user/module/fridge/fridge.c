@@ -34,6 +34,8 @@ extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);
 extern long (*kkv_get_ptr)(u32 key, void *val, size_t size, int flags);
 
+struct kem_cache *kkv_cache;
+
 int fridge_init(void)
 {
 	pr_info("Installing fridge\n");
@@ -41,6 +43,7 @@ int fridge_init(void)
 	kkv_destroy_ptr = kkv_destroy;
 	kkv_put_ptr = kkv_put;
 	kkv_get_ptr = kkv_get;
+	kkv_cache = kmem_cache_create();
 	return 0;
 }
 
@@ -51,6 +54,7 @@ void fridge_exit(void)
 	kkv_put_ptr = NULL;
 	kkv_destroy_ptr = NULL;
 	kkv_init_ptr = NULL;
+	kmem_cache_destroy(kkv_cache);
 }
 
 module_init(fridge_init);
@@ -69,7 +73,8 @@ static void kkv_pair_init(struct kkv_pair *this)
 
 static void kkv_pair_free(struct kkv_pair *this)
 {
-	kfree(this->val);
+	//kfree(this->val);
+	kmem_cache_free(kkv_cache, this->val);
 	/* Not really necessary, but a bit safer and can be easier to debug. */
 	this->val = NULL;
 	this->size = 0;
@@ -83,7 +88,8 @@ static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 	if (!this->val)
 		return -ENOMEM;
 	if (copy_from_user(this->val, user_val, size) != 0) {
-		kfree(this->val);
+		//kfree(this->val);
+		kmem_cache_free(kkv_cache, this->val);
 		return -EFAULT;
 	}
 	this->key = key;
@@ -138,7 +144,8 @@ static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
-		kfree(entry);
+		//kfree(entry);
+		kmem_cache_free(kkv_cache, entry);
 		this->count--;
 	}
 
@@ -191,7 +198,8 @@ static void kkv_buckets_free(struct kkv_buckets *this)
 	kkv_buckets_for__each(this, kkv_ht_bucket_free);
 	this->len_bits = 0;
 	this->len = 0;
-	kfree(this->ptr);
+	//kfree(this->ptr);
+	kmem_cache_free(kkv_cache, this->ptr);
 	this->ptr = NULL;
 }
 
@@ -316,9 +324,11 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	 * but we need to lock the bucket to do that.
 	 * At least this will be more efficient with a slab cache later.
 	 */
-	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
+	//new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
+	new_entry = kmem_cache_alloc(kkv_cache, GFP_KERNEL)
 	if (!new_entry) {
 		kkv_pair_free(&pair);
+		printk(KERN_ERR "new kmem alloc failed");
 		return -ENOMEM;
 	}
 
@@ -351,7 +361,8 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	read_unlock(&this->lock);
 
 	if (!adding)
-		kfree(new_entry);
+		//kfree(new_entry);
+		kmem_cache_free(kkv_cache, new_entry);
 	kkv_pair_free(&pair);
 
 	return 0;
@@ -397,7 +408,8 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
 	/* Free before returning the error. */
 	kkv_ht_entry_free(entry);
-	kfree(entry);
+	//kfree(entry);
+	kmem_cache_free(kkv_cache, entry);
 	if (e < 0)
 		return e;
 
