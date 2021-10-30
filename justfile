@@ -229,6 +229,8 @@ run-mod mod_path *args: (run-mod-only mod_path args)
 
 test *args: (run-mod default_mod_path args)
 
+test-part part_name: (test "just" "make-in" "user/test/FireFerrises-p" + part_name + "-test" "test-all")
+
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
 
