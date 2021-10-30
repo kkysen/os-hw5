@@ -78,6 +78,7 @@ static void kkv_pair_free(struct kkv_pair *this)
 	this->key = (u32)-1;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 				    const void *user_val, size_t size)
 {
@@ -93,6 +94,7 @@ static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 	return 0;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_pair_copy_to_user(struct kkv_pair *this, void *user_val,
 				  size_t user_size)
 {
@@ -174,6 +176,7 @@ static u8 num_bits_used(size_t n)
 	return max_bits;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 {
 	this->ptr = kmalloc_array(len, sizeof(*this->ptr), GFP_KERNEL);
@@ -197,16 +200,19 @@ static void kkv_buckets_free(struct kkv_buckets *this)
 	this->ptr = NULL;
 }
 
+__attribute__((warn_unused_result))
 static u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
 {
 	return hash_32(key, this->len_bits) % this->len;
 }
 
+__attribute__((warn_unused_result))
 static struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this, u32 key)
 {
 	return &this->ptr[kkv_buckets_index(this, key)];
 }
 
+__attribute__((warn_unused_result))
 static struct kkv_ht_entry *kkv_ht_bucket_find(const struct kkv_ht_bucket *this,
 					       u32 key)
 {
@@ -238,6 +244,7 @@ struct kkv {
 	rwlock_t lock; /* guards buckets (buckets.ptr) */
 };
 
+__attribute__((warn_unused_result))
 static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
 {
 	if (!!this->buckets.ptr ^ expecting_initialized) {
@@ -266,6 +273,7 @@ static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
 	return 0;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
@@ -282,6 +290,7 @@ ret:
 	return e;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_free(struct kkv *this)
 {
 	long e;
@@ -298,6 +307,7 @@ ret:
 	return e;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		     size_t user_size, int flags)
 {
@@ -366,6 +376,7 @@ ret:
 	return e;
 }
 
+__attribute__((warn_unused_result))
 static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		     size_t user_size, int flags)
 {
@@ -428,6 +439,7 @@ static struct kkv kkv;
  * The result of initializing twice (without an intervening
  * kkv_destroy() call) is undefined.
  */
+__attribute__((warn_unused_result))
 static long kkv_init(int flags)
 {
 	long e;
@@ -460,6 +472,7 @@ ret:
  *
  * The result of destroying before initializing is undefined.
  */
+__attribute__((warn_unused_result))
 static long kkv_destroy(int flags)
 {
 	long e;
@@ -471,7 +484,9 @@ static long kkv_destroy(int flags)
 		goto ret;
 	}
 
-	kkv_free(&kkv);
+	e = kkv_free(&kkv);
+	if (e < 0)
+		goto ret;
 
 ret:
 	return e;
@@ -495,6 +510,7 @@ ret:
  * The result of calling kkv_put() before initializing the Kernel
  * Key-Value store is undefined.
  */
+__attribute__((warn_unused_result))
 static long kkv_put(u32 key, const void *val, size_t size, int flags)
 {
 	return kkv_put_(&kkv, key, val, size, flags);
@@ -518,6 +534,7 @@ static long kkv_put(u32 key, const void *val, size_t size, int flags)
  * The result of calling kkv_get() before initializing the Kernel Key-Value
  * store is undefined.
  */
+__attribute__((warn_unused_result))
 static long kkv_get(u32 key, void *val, size_t size, int flags)
 {
 	return kkv_get_(&kkv, key, val, size, flags);
