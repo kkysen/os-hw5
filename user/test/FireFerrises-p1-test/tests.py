@@ -98,9 +98,15 @@ def test_put_a_lot():
     finally:
         kkv.destroy()
 
+def test_put_a_lot(n: int):
+    kkv.init()
+    put_a_lot(n=n)
+    assert kkv.destroy() == n
+
+
 def main():
     # unknown_flags_test()
-    test_put_a_lot()
+    test_put_a_lot(n=10)
     kkv.init()
     try:
         len_test()

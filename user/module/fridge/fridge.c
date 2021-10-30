@@ -114,19 +114,25 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 	};
 }
 
-static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
+/* Return number of entries freed. */
+static size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 {
 	struct kkv_ht_entry *entry;
 	struct kkv_ht_entry *tmp;
+	size_t n;
 
-	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
+	n = 0;
+	list_for_each_entry_safe (entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
 		kfree(entry);
 		this->count--;
+		n++;
 	}
 
 	/* spinlocks don't need to be freed */
+
+	return n;
 }
 
 static MUST_USE struct kkv_buckets kkv_buckets_new(void)
@@ -136,15 +142,6 @@ static MUST_USE struct kkv_buckets kkv_buckets_new(void)
 		.len = 0,
 		.len_bits = 0,
 	};
-}
-
-static void kkv_buckets_for__each(struct kkv_buckets *this,
-				  void (*f)(struct kkv_ht_bucket *bucket))
-{
-	size_t i;
-
-	for (i = 0; i < this->len; i++)
-		f(&this->ptr[i]);
 }
 
 static u8 num_bits_used(size_t n)
@@ -161,6 +158,9 @@ static u8 num_bits_used(size_t n)
 
 static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 {
+	size_t i;
+	struct kkv_ht_bucket *bucket;
+
 	this->ptr = kmalloc_array(len, sizeof(*this->ptr), GFP_KERNEL);
 	if (!this->ptr) {
 		this->len = 0;
@@ -169,17 +169,32 @@ static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 	}
 	this->len = len;
 	this->len_bits = num_bits_used(len);
-	kkv_buckets_for__each(this, kkv_ht_bucket_init);
+	for (i = 0; i < this->len; i++) {
+		bucket = &this->ptr[i];
+		kkv_ht_bucket_init(bucket);
+	}
 	return 0;
 }
 
-static void kkv_buckets_free(struct kkv_buckets *this)
+/* Return number of entries freed. */
+static u64 kkv_buckets_free(struct kkv_buckets *this)
 {
-	kkv_buckets_for__each(this, kkv_ht_bucket_free);
+	size_t i;
+	struct kkv_ht_bucket *bucket;
+	size_t n;
+
+	n = 0;
+	for (i = 0; i < this->len; i++) {
+		bucket = &this->ptr[i];
+		n += kkv_ht_bucket_free(bucket);
+	}
+
 	this->len_bits = 0;
 	this->len = 0;
 	kfree(this->ptr);
 	this->ptr = NULL;
+
+	return n;
 }
 
 static MUST_USE u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
@@ -198,7 +213,7 @@ kkv_ht_bucket_find(const struct kkv_ht_bucket *this, u32 key)
 {
 	struct kkv_ht_entry *entry;
 
-	list_for_each_entry(entry, &this->entries, entries) {
+	list_for_each_entry (entry, &this->entries, entries) {
 		if (entry->kv_pair.key == key)
 			return entry;
 	}
@@ -285,6 +300,7 @@ ret:
 	return e;
 }
 
+/* Return number of entries freed. */
 static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
@@ -295,7 +311,7 @@ static MUST_USE long kkv_free(struct kkv *this)
 		e = -EPERM;
 		goto ret;
 	}
-	kkv_buckets_free(&this->buckets);
+	e = (long)kkv_buckets_free(&this->buckets);
 	write_unlock(&this->lock);
 	goto ret;
 

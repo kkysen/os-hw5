@@ -30,8 +30,9 @@ def wrap_syscall(name: str, syscall_num: int, arg_types: Tuple[Type[_SimpleCData
 
     def wrapper(*args) -> None:
         ret_val = syscall(syscall_num, *args)
-        if ret_val != 0:
+        if ret_val == -1:
             raise OSError(get_errno(), name)
+        return ret_val
 
     return wrapper
 
@@ -50,8 +51,8 @@ def init(flags: Flag = Flag.NonBlock):
     sys_init(flags.value)
 
 
-def destroy(flags: Flag = Flag.NonBlock):
-    sys_destroy(flags.value)
+def destroy(flags: Flag = Flag.NonBlock) -> int:
+    return sys_destroy(flags.value)
 
 
 def put(key: int, value: str, flags: Flag = Flag.NonBlock):
