@@ -29,8 +29,9 @@ install-program-dependencies:
     cargo quickinstall gitui
 
 parallel-bash-commands:
-    -rg '^(.*)$' --replace '$1 &' --color never
-    echo wait
+    echo 'pids=()'
+    -rg '^(.*)$' --replace '$1 &'$'\n''pids+=($!)' --color never
+    echo 'for pid in ${pids[@]}; do wait $pid; done'
 
 sequential-bash:
     bash
