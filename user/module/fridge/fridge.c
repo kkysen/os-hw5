@@ -51,6 +51,8 @@ void fridge_exit(void)
 	kkv_put_ptr = NULL;
 	kkv_destroy_ptr = NULL;
 	kkv_init_ptr = NULL;
+	/* Destroy in case the user forgot so we don't leak anything. */
+	kkv_destroy(0);
 }
 
 module_init(fridge_init);
@@ -272,10 +274,11 @@ static long kkv_init_(struct kkv *this, size_t len)
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
 	if (e < 0)
-		return e;
+		goto ret;
 	e = kkv_buckets_init(&this->buckets, len);
 	write_unlock(&this->lock);
 
+ret:
 	return e;
 }
 
@@ -287,10 +290,11 @@ static long kkv_free(struct kkv *this)
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
 	if (e < 0)
-		return e;
+		goto ret;
 	kkv_buckets_free(&this->buckets);
 	write_unlock(&this->lock);
 
+ret:
 	return e;
 }
 
@@ -303,13 +307,17 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	struct kkv_pair pair;
 	bool adding;
 
-	if (flags != 0)
-		return -EINVAL;
+	e = 0;
+
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	/* Allocates, so put it before critical section. */
 	e = kkv_pair_init_from_user(&pair, key, user_val, user_size);
 	if (e < 0)
-		return e;
+		goto ret;
 
 	/* Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
 	 * and we don't know if we need to alloc until we see if the entry is already there,
@@ -318,15 +326,14 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	 */
 	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
 	if (!new_entry) {
-		kkv_pair_free(&pair);
-		return -ENOMEM;
+		e = -ENOMEM;
+		goto pair_free;
 	}
+	adding = false;
 
-	/*check to ensure no read or write*/
 	e = kkv_lock(this, /* write */ false, /* expect init */ true);
 	if (e < 0)
-		return e;
-	read_lock(&this->lock);
+		goto free_entry;
 
 	bucket = kkv_buckets_get(&this->buckets, key);
 
@@ -337,8 +344,8 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		struct kkv_pair tmp;
 
 		entry = kkv_ht_bucket_find(bucket, key);
-		adding = !entry;
-		if (adding) {
+		if (!entry) {
+			adding = true;
 			entry = new_entry;
 			kkv_ht_entry_init(entry);
 			kkv_ht_bucket_add(bucket, entry);
@@ -350,11 +357,13 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
 
+free_entry:
 	if (!adding)
 		kfree(new_entry);
+pair_free:
 	kkv_pair_free(&pair);
-
-	return 0;
+ret:
+	return e;
 }
 
 static long kkv_get_(struct kkv *this, u32 key, void *user_val,
@@ -364,17 +373,19 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	struct kkv_ht_bucket *bucket;
 	struct kkv_ht_entry *entry;
 
-	if (flags != KKV_NONBLOCK)
-		return -EINVAL;
+	e = 0;
 
-	bucket = kkv_buckets_get(&this->buckets, key);
+	if (flags != KKV_NONBLOCK) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	//check to ensure no read or write
 	e = kkv_lock(this, /* write */ false, /* expect init */ true);
 	if (e < 0)
-		return e;
+		goto ret;
 
-	read_lock(&this->lock);
+	bucket = kkv_buckets_get(&this->buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
@@ -391,17 +402,18 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
 
-	if (!entry)
-		return -ENOENT;
+	if (!entry) {
+		e = -ENOENT;
+		goto free_entry;
+	}
 
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
-	/* Free before returning the error. */
-	kkv_ht_entry_free(entry);
-	kfree(entry);
-	if (e < 0)
-		return e;
 
-	return 0;
+	kkv_ht_entry_free(entry);
+free_entry:
+	kfree(entry);
+ret:
+	return e;
 }
 
 static struct kkv kkv;
@@ -420,14 +432,19 @@ static long kkv_init(int flags)
 {
 	long e;
 
-	if (flags != 0)
-		return -EINVAL;
+	e = 0;
+
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	e = kkv_init_(&kkv, HASH_TABLE_LENGTH);
 	if (e < 0)
-		return e;
+		goto ret;
 
-	return 0;
+ret:
+	return e;
 }
 
 /*
@@ -445,12 +462,19 @@ static long kkv_init(int flags)
  */
 static long kkv_destroy(int flags)
 {
-	if (flags != 0)
-		return -EINVAL;
+	long e;
+
+	e = 0;
+
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	kkv_free(&kkv);
 
-	return 0;
+ret:
+	return e;
 }
 
 /*
