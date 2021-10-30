@@ -28,45 +28,21 @@
 
 #define trace() pr_info("%s:%u:%s", __FILE__, __LINE__, __func__)
 
-static long kkv_init(int flags);
-static long kkv_destroy(int flags);
-static long kkv_put(u32 key, const void *val, size_t size, int flags);
-static long kkv_get(u32 key, void *val, size_t size, int flags);
-
 extern long (*kkv_init_ptr)(int flags);
 extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);
 extern long (*kkv_get_ptr)(u32 key, void *val, size_t size, int flags);
 
-int fridge_init(void)
-{
-	pr_info("Installing fridge\n");
-	kkv_init_ptr = kkv_init;
-	kkv_destroy_ptr = kkv_destroy;
-	kkv_put_ptr = kkv_put;
-	kkv_get_ptr = kkv_get;
-	return 0;
-}
+struct kkv_buckets {
+	struct kkv_ht_bucket *ptr;
+	size_t len;
+	u8 len_bits;
+};
 
-void fridge_exit(void)
-{
-	pr_info("Removing fridge\n");
-	kkv_get_ptr = NULL;
-	kkv_put_ptr = NULL;
-	kkv_destroy_ptr = NULL;
-	kkv_init_ptr = NULL;
-	/* Destroy in case the user forgot so we don't leak anything.
-	 * It's also okay if it returns an error; we don't care.
-	 */
-	kkv_destroy(0);
-}
-
-module_init(fridge_init);
-module_exit(fridge_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION(MODULE_NAME);
-MODULE_AUTHOR("FireFerrises");
+struct kkv {
+	struct kkv_buckets buckets;
+	rwlock_t lock; /* guards buckets (buckets.ptr) */
+};
 
 static void kkv_pair_init(struct kkv_pair *this)
 {
@@ -153,11 +129,14 @@ static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 	/* spinlocks don't need to be freed */
 }
 
-struct kkv_buckets {
-	struct kkv_ht_bucket *ptr;
-	size_t len;
-	u8 len_bits;
-};
+static MUST_USE struct kkv_buckets kkv_buckets_new(void)
+{
+	return (struct kkv_buckets){
+		.ptr = NULL,
+		.len = 0,
+		.len_bits = 0,
+	};
+}
 
 static void kkv_buckets_for__each(struct kkv_buckets *this,
 				  void (*f)(struct kkv_ht_bucket *bucket))
@@ -240,10 +219,13 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 	list_del(&entry->entries);
 }
 
-struct kkv {
-	struct kkv_buckets buckets;
-	rwlock_t lock; /* guards buckets (buckets.ptr) */
-};
+static MUST_USE struct kkv kkv_new(void)
+{
+	return (struct kkv){
+		.buckets = kkv_buckets_new(),
+		.lock = __RW_LOCK_UNLOCKED(),
+	};
+}
 
 static MUST_USE long kkv_lock(struct kkv *this, bool write,
 			      bool expecting_initialized)
@@ -257,6 +239,11 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * Already initialized.
 		 * First check before lock so we avoid lock in most cases.
 		 */
+		trace();
+		pr_info("expecting_initialized = %s\n",
+			expecting_initialized ? "true" : "false");
+		pr_info("has buckets = %s\n",
+			!!this->buckets.ptr ? "true" : "false");
 		e = -EPERM;
 		goto ret;
 	}
@@ -266,6 +253,7 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * then init or destroy are being called currently,
 		 * which is not when you're supposed to call anything else.
 		 */
+		trace();
 		e = -EPERM;
 		goto ret;
 	}
@@ -274,6 +262,7 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * Already initialized.
 		 * Second real check while holding lock.
 		 */
+		trace();
 		e = -EPERM;
 		goto unlock;
 	}
@@ -287,6 +276,7 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
 
+	trace();
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
@@ -296,6 +286,8 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 	write_unlock(&this->lock);
 
 ret:
+	trace();
+	pr_info("return %ld\n", e);
 	return e;
 }
 
@@ -303,6 +295,7 @@ static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
 
+	trace();
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ true);
@@ -312,6 +305,8 @@ static MUST_USE long kkv_free(struct kkv *this)
 	write_unlock(&this->lock);
 
 ret:
+	trace();
+	pr_info("return %ld\n", e);
 	return e;
 }
 
@@ -541,3 +536,36 @@ static MUST_USE long kkv_get(u32 key, void *val, size_t size, int flags)
 {
 	return kkv_get_(&kkv, key, val, size, flags);
 }
+
+int fridge_init(void)
+{
+	pr_info("Installing fridge\n");
+	kkv = kkv_new();
+	kkv_init_ptr = kkv_init;
+	kkv_destroy_ptr = kkv_destroy;
+	kkv_put_ptr = kkv_put;
+	kkv_get_ptr = kkv_get;
+	return 0;
+}
+
+void fridge_exit(void)
+{
+	long e_;
+
+	pr_info("Removing fridge\n");
+	kkv_get_ptr = NULL;
+	kkv_put_ptr = NULL;
+	kkv_destroy_ptr = NULL;
+	kkv_init_ptr = NULL;
+	/* Destroy in case the user forgot so we don't leak anything.
+	 * It's also okay if it returns an error; we don't care.
+	 */
+	e_ = kkv_free(&kkv);
+}
+
+module_init(fridge_init);
+module_exit(fridge_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION(MODULE_NAME);
+MODULE_AUTHOR("FireFerrises");
