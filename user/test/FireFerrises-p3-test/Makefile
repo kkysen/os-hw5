@@ -14,5 +14,7 @@ test-all:
 	../con-ed/simple_sequential
 	../con-ed/hot_potato 1000
 	../FireFerrises-p1-test/tests.py
+	../FireFerrises-p2-test/tests.py
+	../FireFerrises-p3-test/tests.py
 
 .PHONY: $(PHONY)

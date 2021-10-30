@@ -44,6 +44,8 @@ We also used a shared `user/test/kkv.py` instead of `user/test/py-in-fridge/libf
 because we wanted to modify a few things, such as adding type annotations
 and adding a variable length field to `kkv_get` instead of always using the same `BUF_SIZE`.
 
+To run the tests, run `make test` in `user/test/FireFerrises-p1-test/`.
+
 
 ### part2
 TODO
