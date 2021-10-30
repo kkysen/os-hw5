@@ -24,6 +24,10 @@
 
 #define MODULE_NAME "Fridge"
 
+#define MUST_USE __attribute__((warn_unused_result))
+
+#define trace() pr_info("%s:%u:%s", __FILE__, __LINE__, __func__)
+
 static long kkv_init(int flags);
 static long kkv_destroy(int flags);
 static long kkv_put(u32 key, const void *val, size_t size, int flags);
@@ -51,7 +55,9 @@ void fridge_exit(void)
 	kkv_put_ptr = NULL;
 	kkv_destroy_ptr = NULL;
 	kkv_init_ptr = NULL;
-	/* Destroy in case the user forgot so we don't leak anything. */
+	/* Destroy in case the user forgot so we don't leak anything.
+	 * It's also okay if it returns an error; we don't care.
+	 */
 	kkv_destroy(0);
 }
 
@@ -78,9 +84,8 @@ static void kkv_pair_free(struct kkv_pair *this)
 	this->key = (u32)-1;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
-				    const void *user_val, size_t size)
+static MUST_USE long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
+					     const void *user_val, size_t size)
 {
 	this->val = kmalloc(size, GFP_KERNEL);
 	if (!this->val)
@@ -94,9 +99,8 @@ static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 	return 0;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_pair_copy_to_user(struct kkv_pair *this, void *user_val,
-				  size_t user_size)
+static MUST_USE long kkv_pair_copy_to_user(struct kkv_pair *this,
+					   void *user_val, size_t user_size)
 {
 	/* The user tried to copy more bytes from kernel, just truncate it.
 	 * If the user copies fewer bytes, return what they asked for,
@@ -176,8 +180,7 @@ static u8 num_bits_used(size_t n)
 	return max_bits;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
+static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 {
 	this->ptr = kmalloc_array(len, sizeof(*this->ptr), GFP_KERNEL);
 	if (!this->ptr) {
@@ -200,21 +203,19 @@ static void kkv_buckets_free(struct kkv_buckets *this)
 	this->ptr = NULL;
 }
 
-__attribute__((warn_unused_result))
-static u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
+static MUST_USE u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
 {
 	return hash_32(key, this->len_bits) % this->len;
 }
 
-__attribute__((warn_unused_result))
-static struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this, u32 key)
+static MUST_USE struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this,
+						      u32 key)
 {
 	return &this->ptr[kkv_buckets_index(this, key)];
 }
 
-__attribute__((warn_unused_result))
-static struct kkv_ht_entry *kkv_ht_bucket_find(const struct kkv_ht_bucket *this,
-					       u32 key)
+static MUST_USE struct kkv_ht_entry *
+kkv_ht_bucket_find(const struct kkv_ht_bucket *this, u32 key)
 {
 	struct kkv_ht_entry *entry;
 
@@ -244,15 +245,20 @@ struct kkv {
 	rwlock_t lock; /* guards buckets (buckets.ptr) */
 };
 
-__attribute__((warn_unused_result))
-static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
+static MUST_USE long kkv_lock(struct kkv *this, bool write,
+			      bool expecting_initialized)
 {
+	long e;
+
+	e = 0;
+
 	if (!!this->buckets.ptr ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * First check before lock so we avoid lock in most cases.
 		 */
-		return -EPERM;
+		e = -EPERM;
+		goto ret;
 	}
 	if (!(write ? write_trylock(&this->lock) : read_trylock(&this->lock))) {
 		/**
@@ -260,21 +266,24 @@ static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
 		 * then init or destroy are being called currently,
 		 * which is not when you're supposed to call anything else.
 		 */
-		return -EPERM;
+		e = -EPERM;
+		goto ret;
 	}
 	if (!!this->buckets.ptr ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * Second real check while holding lock.
 		 */
-		write ? write_unlock(&this->lock) : read_unlock(&this->lock);
-		return -EPERM;
+		e = -EPERM;
+		goto unlock;
 	}
-	return 0;
+unlock:
+	write ? write_unlock(&this->lock) : read_unlock(&this->lock);
+ret:
+	return e;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_init_(struct kkv *this, size_t len)
+static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
 
@@ -290,8 +299,7 @@ ret:
 	return e;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_free(struct kkv *this)
+static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
 
@@ -307,9 +315,8 @@ ret:
 	return e;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
-		     size_t user_size, int flags)
+static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
+			      size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
@@ -376,9 +383,8 @@ ret:
 	return e;
 }
 
-__attribute__((warn_unused_result))
-static long kkv_get_(struct kkv *this, u32 key, void *user_val,
-		     size_t user_size, int flags)
+static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
+			      size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
@@ -439,8 +445,7 @@ static struct kkv kkv;
  * The result of initializing twice (without an intervening
  * kkv_destroy() call) is undefined.
  */
-__attribute__((warn_unused_result))
-static long kkv_init(int flags)
+static MUST_USE long kkv_init(int flags)
 {
 	long e;
 
@@ -472,8 +477,7 @@ ret:
  *
  * The result of destroying before initializing is undefined.
  */
-__attribute__((warn_unused_result))
-static long kkv_destroy(int flags)
+static MUST_USE long kkv_destroy(int flags)
 {
 	long e;
 
@@ -510,8 +514,7 @@ ret:
  * The result of calling kkv_put() before initializing the Kernel
  * Key-Value store is undefined.
  */
-__attribute__((warn_unused_result))
-static long kkv_put(u32 key, const void *val, size_t size, int flags)
+static MUST_USE long kkv_put(u32 key, const void *val, size_t size, int flags)
 {
 	return kkv_put_(&kkv, key, val, size, flags);
 }
@@ -534,8 +537,7 @@ static long kkv_put(u32 key, const void *val, size_t size, int flags)
  * The result of calling kkv_get() before initializing the Kernel Key-Value
  * store is undefined.
  */
-__attribute__((warn_unused_result))
-static long kkv_get(u32 key, void *val, size_t size, int flags)
+static MUST_USE long kkv_get(u32 key, void *val, size_t size, int flags)
 {
 	return kkv_get_(&kkv, key, val, size, flags);
 }
