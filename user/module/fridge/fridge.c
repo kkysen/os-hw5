@@ -305,7 +305,7 @@ static MUST_USE long kkv_free(struct kkv *this)
 
 	e = 0;
 
-	e = kkv_lock(this, /* write */ true, /* expect init */ false);
+	e = kkv_lock(this, /* write */ true, /* expect init */ true);
 	if (e < 0)
 		goto ret;
 	kkv_buckets_free(&this->buckets);
