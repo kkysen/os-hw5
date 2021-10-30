@@ -227,19 +227,19 @@ static MUST_USE struct kkv kkv_new(void)
 	};
 }
 
-static MUST_USE long kkv_lock(struct kkv *this, bool write,
+/* Return if the lock was acquired. */
+static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 			      bool expecting_initialized)
 {
-	long e;
+	bool locked;
 
-	e = 0;
+	locked = false;
 
 	if (!!this->buckets.ptr ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * First check before lock so we avoid lock in most cases.
 		 */
-		e = -EPERM;
 		goto ret;
 	}
 	if (!(write ? write_trylock(&this->lock) : read_trylock(&this->lock))) {
@@ -248,7 +248,6 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * then init or destroy are being called currently,
 		 * which is not when you're supposed to call anything else.
 		 */
-		e = -EPERM;
 		goto ret;
 	}
 	if (!!this->buckets.ptr ^ expecting_initialized) {
@@ -256,15 +255,16 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * Already initialized.
 		 * Second real check while holding lock.
 		 */
-		e = -EPERM;
 		goto unlock;
 	}
+	locked = true;
 	goto ret;
 
 unlock:
 	write ? write_unlock(&this->lock) : read_unlock(&this->lock);
+	locked = false;
 ret:
-	return e;
+	return locked;
 }
 
 static MUST_USE long kkv_init_(struct kkv *this, size_t len)
@@ -273,11 +273,13 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 
 	e = 0;
 
-	e = kkv_lock(this, /* write */ true, /* expect init */ false);
-	if (e < 0)
+	if (!kkv_lock(this, /* write */ true, /* expect init */ false)) {
+		e = -EPERM;
 		goto ret;
+	}
 	e = kkv_buckets_init(&this->buckets, len);
 	write_unlock(&this->lock);
+	goto ret;
 
 ret:
 	return e;
@@ -289,11 +291,13 @@ static MUST_USE long kkv_free(struct kkv *this)
 
 	e = 0;
 
-	e = kkv_lock(this, /* write */ true, /* expect init */ true);
-	if (e < 0)
+	if (!kkv_lock(this, /* write */ true, /* expect init */ true)) {
+		e = -EPERM;
 		goto ret;
+	}
 	kkv_buckets_free(&this->buckets);
 	write_unlock(&this->lock);
+	goto ret;
 
 ret:
 	return e;
@@ -332,9 +336,10 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	adding = false;
 
-	e = kkv_lock(this, /* write */ false, /* expect init */ true);
-	if (e < 0)
+	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
+		e = -EPERM;
 		goto free_entry;
+	}
 
 	bucket = kkv_buckets_get(&this->buckets, key);
 
@@ -357,6 +362,7 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
+	goto free_entry;
 
 free_entry:
 	if (!adding)
@@ -382,9 +388,10 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	}
 
 	//check to ensure no read or write
-	e = kkv_lock(this, /* write */ false, /* expect init */ true);
-	if (e < 0)
+	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
+		e = -EPERM;
 		goto ret;
+	}
 
 	bucket = kkv_buckets_get(&this->buckets, key);
 
@@ -407,9 +414,10 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		e = -ENOENT;
 		goto free_entry;
 	}
-
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
+	goto entry_free;
 
+entry_free:
 	kkv_ht_entry_free(entry);
 free_entry:
 	kfree(entry);
@@ -443,6 +451,7 @@ static MUST_USE long kkv_init(int flags)
 	e = kkv_init_(&kkv, HASH_TABLE_LENGTH);
 	if (e < 0)
 		goto ret;
+	goto ret;
 
 ret:
 	return e;
@@ -475,6 +484,7 @@ static MUST_USE long kkv_destroy(int flags)
 	e = kkv_free(&kkv);
 	if (e < 0)
 		goto ret;
+	goto ret;
 
 ret:
 	return e;
