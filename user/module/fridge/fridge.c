@@ -115,14 +115,14 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 }
 
 /* Return number of entries freed. */
-static size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this)
+static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 {
 	struct kkv_ht_entry *entry;
 	struct kkv_ht_entry *tmp;
 	size_t n;
 
 	n = 0;
-	list_for_each_entry_safe (entry, tmp, &this->entries, entries) {
+	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
 		kfree(entry);
@@ -177,7 +177,7 @@ static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 }
 
 /* Return number of entries freed. */
-static size_t kkv_buckets_free(struct kkv_buckets *this)
+static MUST_USE size_t kkv_buckets_free(struct kkv_buckets *this)
 {
 	size_t i;
 	struct kkv_ht_bucket *bucket;
@@ -213,7 +213,7 @@ kkv_ht_bucket_find(const struct kkv_ht_bucket *this, u32 key)
 {
 	struct kkv_ht_entry *entry;
 
-	list_for_each_entry (entry, &this->entries, entries) {
+	list_for_each_entry(entry, &this->entries, entries) {
 		if (entry->kv_pair.key == key)
 			return entry;
 	}
