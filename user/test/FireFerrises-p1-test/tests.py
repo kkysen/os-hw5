@@ -91,12 +91,16 @@ def put_a_lot(n: int):
         value = "hello world\n" * i
         kkv.put(key=key, value=value)
 
+def test_put_a_lot():
+    try:
+        kkv.init()
+        put_a_lot(n=10)
+    finally:
+        kkv.destroy()
 
 def main():
     # unknown_flags_test()
-    kkv.init()
-    put_a_lot(n=10)
-    kkv.destroy()
+    test_put_a_lot()
     kkv.init()
     try:
         len_test()
