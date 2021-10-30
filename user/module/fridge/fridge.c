@@ -190,7 +190,7 @@ static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 }
 
 /* Return number of entries freed. */
-static u64 kkv_buckets_free(struct kkv_buckets *this)
+static size_t kkv_buckets_free(struct kkv_buckets *this)
 {
 	size_t i;
 	struct kkv_ht_bucket *bucket;
