@@ -239,11 +239,6 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * Already initialized.
 		 * First check before lock so we avoid lock in most cases.
 		 */
-		trace();
-		pr_info("expecting_initialized = %s\n",
-			expecting_initialized ? "true" : "false");
-		pr_info("has buckets = %s\n",
-			!!this->buckets.ptr ? "true" : "false");
 		e = -EPERM;
 		goto ret;
 	}
@@ -253,7 +248,6 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * then init or destroy are being called currently,
 		 * which is not when you're supposed to call anything else.
 		 */
-		trace();
 		e = -EPERM;
 		goto ret;
 	}
@@ -262,7 +256,6 @@ static MUST_USE long kkv_lock(struct kkv *this, bool write,
 		 * Already initialized.
 		 * Second real check while holding lock.
 		 */
-		trace();
 		e = -EPERM;
 		goto unlock;
 	}
@@ -276,7 +269,6 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
 
-	trace();
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ false);
@@ -286,8 +278,6 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 	write_unlock(&this->lock);
 
 ret:
-	trace();
-	pr_info("return %ld\n", e);
 	return e;
 }
 
@@ -295,7 +285,6 @@ static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
 
-	trace();
 	e = 0;
 
 	e = kkv_lock(this, /* write */ true, /* expect init */ true);
@@ -305,8 +294,6 @@ static MUST_USE long kkv_free(struct kkv *this)
 	write_unlock(&this->lock);
 
 ret:
-	trace();
-	pr_info("return %ld\n", e);
 	return e;
 }
 
