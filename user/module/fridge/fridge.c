@@ -264,23 +264,20 @@ static MUST_USE struct kkv kkv_new(void)
 	};
 }
 
-static const bool kkv_fail_fast = true;
-
 /* Return if the lock was acquired. */
 static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 			      bool expecting_initialized)
 {
+	bool fail_fast;
 	bool locked;
 
+	/**
+	 * Fail fast on writes, b/c they can be starved,
+	 * and it doesn't reduce get/put concurrency, which are reads.
+	 */
+	fail_fast = write;
 	locked = false;
 
-	if (this->initialized ^ expecting_initialized) {
-		/**
-		 * Already initialized.
-		 * First check before lock so we avoid lock in most cases.
-		 */
-		goto ret;
-	}
 	/**
 	 * If we want to fail fast and notify the user
 	 * that they are using the kkv API wrong,
@@ -292,7 +289,14 @@ static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 	 * and succeed if the initialized state is correct after,
 	 * i.e. a kkv_put waiting for a kkv_init, for example.
 	 */
-	if (kkv_fail_fast) {
+	if (fail_fast) {
+		if (this->initialized ^ expecting_initialized) {
+			/**
+			 * Already initialized.
+			 * First check before lock so we avoid lock in most cases.
+			 */
+			goto ret;
+		}
 		if (!(write ? write_trylock(&this->lock) :
 				    read_trylock(&this->lock))) {
 			/**
