@@ -526,7 +526,7 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	e = 0;
 
-	if (flags != KKV_NONBLOCK) {
+	if (flags & ~(KKV_NONBLOCK | KKV_BLOCK)) {
 		e = -EINVAL;
 		goto ret;
 	}
@@ -565,6 +565,15 @@ free_entry:
 	kkv_ht_entry_free(entry);
 	kmem_cache_free(this->cache, entry);
 ret:
+	if (e == -ENOENT && flags & KKV_BLOCK) {
+		/**
+		 * Recurse from here at the end of the function
+		 * after we've cleaned up everything.
+		 */
+		/* TODO block */
+
+		return kkv_get_(this, key, user_val, user_size, flags);
+	}
 	return e;
 }
 
