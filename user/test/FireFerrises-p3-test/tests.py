@@ -3,7 +3,7 @@
 from functools import wraps
 from typing import Callable
 from multiprocessing import Pool
-from errno import EPERM
+from errno import ENOENT, EPERM
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -60,11 +60,13 @@ def init_and_put_test(i: int):
     key = i
     value = "hello world\n" * i
     # print(f"key = {key}")
-    kkv.init()
-    kkv.put(key=key, value=value)
-    response = kkv.get(key=key, len=len(value))
-    assert response == value
-
+    try:
+        kkv.init()
+        kkv.put(key=key, value=value)
+        response = kkv.get(key=key, len=len(value))
+        assert response == value
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM)
 
 @benchmark
 def _1b_parallel_tests():
@@ -77,9 +79,11 @@ def _1b_parallel_tests():
 
 
 def init_and_destroy(i: int):
-    kkv.init()
-    kkv.destroy()
-
+    try:
+        kkv.init()
+        kkv.destroy()
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM)
 
 @benchmark
 def _1c_parallel_tests():
@@ -94,11 +98,14 @@ def four_same_time(i: int):
     key = i
     value = "hello world\n" * i
     # print(f"key = {key}")
-    kkv.init()
-    kkv.put(key=key, value=value)
-    response = kkv.get(key=key, len=len(value))
-    kkv.destroy()
-    assert response == value
+    try:
+        kkv.init()
+        kkv.put(key=key, value=value)
+        response = kkv.get(key=key, len=len(value))
+        kkv.destroy()
+        assert response == value
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM, ENOENT)
 
 
 @benchmark
