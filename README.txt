@@ -122,11 +122,20 @@ and that should trigger that response.
 
 ### part3
 
-This part is TODO.
+This part is working.
 
 ##### Module
 
-TODO
+A cache is created on module init and destroyed on module destroy (stored in `struct kkv`).
+We replaced our calls to `kmalloc` and `kfree` for each of the entries
+with calls to `kmem_cache_alloc` and `kmem_cache_free` using the cache.
+This was done to improve the speed and efficiency of the program
+because we are able to allocate directly from the pre-allocated cache,
+which knows the size of the entry already, instead of needing to
+specify the size each time with `kmalloc` from the kernel,
+meaning it can't size-optimize it as well.
+
+We also needed to avoid calling `kmem_cache_free(NULL)` (`kfree(NULL)` works).
 
 ##### Tests
 
@@ -140,8 +149,11 @@ Even with entry allocations dominating, though,
 sometimes the part2 module would be slightly faster
 and sometimes the part3 module would be faster.
 `kmalloc` is probably already optimized for small allocations like for
-`struct kkv_ht_entry`, which is only 40 bytes, so we're guessing that's why
+`struct kkv_ht_entry`, which is only 72 bytes, so we're guessing that's why
 there wasn't a major difference in performance.
+We also don't know how much of the time was from
+syscall (context-switch) and locking overhead,
+since a whole context-switch to allocate just 72 bytes is very wasteful.
 
 To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
 This just times the entry allocation heavy test.
