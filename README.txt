@@ -61,10 +61,13 @@ TODO
 
 See part1 for our shared python test code.
 
-TODO
-
 To run the tests, run `make test` in `user/test/FireFerrises-p2-test/`.
 
+We added python tests in `tests.py` to test multiple conditions. One part of this (tests 2-8) is testing to the EPERM errors. If calls that should strictly not be happening -- a get or a put after a destroy, multiple inits or multiple destroys, or a get or a put before an init, occur in sequential order, then we return EPERM. This is testing without the race conditions.
+
+We have also added in the previous get and put test to ensure that our race conditions still work on this part and that our additions for part 2 did not mess up the concurrency between get and put.
+
+We also added multiple tests in part1 that test the concurrency between gets, puts, inits, and destroys. These tests are split up to add in a different system call each time so we were more closely able to identify where the errors may be. The tests also account for EPERM (and in the instance of get/destory, ENOENT) errors, because although get and put will wait for the lock to be acquired, they make still acquire the lock before an init or after the destroy, and that should trigger that response.
 
 ### part3
 
