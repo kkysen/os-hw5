@@ -39,9 +39,14 @@ struct kkv_buckets {
 	u8 len_bits;
 };
 
-struct kkv {
+struct kkv_inner {
 	struct kkv_buckets buckets;
-	rwlock_t lock; /* guards buckets (buckets.ptr) */
+};
+
+struct kkv {
+	struct kkv_inner inner;
+	bool initialized;
+	rwlock_t lock; /* guards initialized */
 };
 
 static void kkv_pair_init(struct kkv_pair *this)
@@ -234,10 +239,29 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 	list_del(&entry->entries);
 }
 
+static MUST_USE struct kkv_inner kkv_inner_new(void)
+{
+	return (struct kkv_inner){
+		.buckets = kkv_buckets_new(),
+	};
+}
+
+static MUST_USE long kkv_inner_init(struct kkv_inner *this, size_t len)
+{
+	return kkv_buckets_init(&this->buckets, len);
+}
+
+/* Return number of entries freed. */
+static MUST_USE size_t kkv_inner_free(struct kkv_inner *this)
+{
+	return kkv_buckets_free(&this->buckets);
+}
+
 static MUST_USE struct kkv kkv_new(void)
 {
 	return (struct kkv){
-		.buckets = kkv_buckets_new(),
+		.inner = kkv_inner_new(),
+		.initialized = false,
 		.lock = __RW_LOCK_UNLOCKED(),
 	};
 }
@@ -250,7 +274,7 @@ static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 
 	locked = false;
 
-	if (!!this->buckets.ptr ^ expecting_initialized) {
+	if (this->initialized ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * First check before lock so we avoid lock in most cases.
@@ -265,7 +289,7 @@ static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 		 */
 		goto ret;
 	}
-	if (!!this->buckets.ptr ^ expecting_initialized) {
+	if (this->initialized ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * Second real check while holding lock.
@@ -285,17 +309,46 @@ ret:
 static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
+	struct kkv_inner inner;
+	size_t _num_freed;
 
 	e = 0;
 
-	if (!kkv_lock(this, /* write */ true, /* expect init */ false)) {
+	if (this->initialized) {
+		/* An extra check before allocating, since that's
+		 * expensive and we'd like to avoid it if possible.
+		 */
 		e = -EPERM;
 		goto ret;
 	}
-	e = kkv_buckets_init(&this->buckets, len);
+	e = kkv_inner_init(&inner, len);
+	if (e < 0)
+		goto ret;
+
+	if (!kkv_lock(this, /* write */ true, /* expect init */ false)) {
+		e = -EPERM;
+		/* Unfortunately we already allocated the inner.
+		 * But nothing we can do about it since
+		 * we can't allocate in the critical section.
+		 */
+		goto inner_free;
+	}
+	{
+		/* Critical section, which is why
+		 * we have to do the allocation before.
+		 * And only swap it in inside the critical section.
+		 * And as soon as we unlock, other threads can
+		 * start reading inner, so we can't allocate after either.
+		 */
+		this->initialized = true;
+		this->inner = inner;
+	}
 	write_unlock(&this->lock);
 	goto ret;
 
+inner_free:
+	_num_freed = kkv_inner_free(&inner);
+	/* should be zero */
 ret:
 	return e;
 }
@@ -304,6 +357,7 @@ ret:
 static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
+	struct kkv_inner inner;
 
 	e = 0;
 
@@ -311,8 +365,22 @@ static MUST_USE long kkv_free(struct kkv *this)
 		e = -EPERM;
 		goto ret;
 	}
-	e = (long)kkv_buckets_free(&this->buckets);
+	{
+		/* Critical section, so we can't do the deallocation here.
+		 * So we set initialized to false so other threads
+		 * don't try to access it, and we swap out inner
+		 * so that we can free it before another thread tries
+		 * to re-initialize it.
+		 */
+		this->initialized = false;
+		inner = this->inner;
+		this->inner = kkv_inner_new();
+	}
 	write_unlock(&this->lock);
+	/* Now inner is detached any only accessible here,
+	 * so we can free it without holding the lock.
+	 */
+	e = (long)kkv_inner_free(&inner);
 	goto ret;
 
 ret:
@@ -357,7 +425,7 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		goto free_entry;
 	}
 
-	bucket = kkv_buckets_get(&this->buckets, key);
+	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
@@ -409,7 +477,7 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		goto ret;
 	}
 
-	bucket = kkv_buckets_get(&this->buckets, key);
+	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
