@@ -26,8 +26,6 @@
 
 #define MUST_USE __attribute__((warn_unused_result))
 
-#define trace() pr_info("%s:%u:%s", __FILE__, __LINE__, __func__)
-
 extern long (*kkv_init_ptr)(int flags);
 extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);

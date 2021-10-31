@@ -55,7 +55,40 @@ This part is working.
 
 ##### Module
 
-TODO
+To make init and destroy thread-safe, too,
+without changing get and put's concurrency,
+we used a rwlock to guard an `initialized` field,
+which indicates if a new `struct kkv_inner` is initialized or not.
+The `struct kkv_inner` contains the buckets,
+but could contain other protected fields later (like the cache),
+which is why it's refactored out.
+
+Thus, in init and destroy, we acquire a write lock,
+since we're writing to the initialized field there,
+while we only acquire a read lock in get and put,
+since we're only reading the initialized field there
+and the data inside the bucket array (not the bucket array itself).
+This allows multiple gets and puts (on separate buckets)
+to still run concurrently since they can acquire multiple read locks.
+Meanwhile, init and destroy have to acquire the exclusive write lock,
+so they have exclusive access when they run and can modify the bucket array.
+
+However, just like in get and put in part1, we had to be careful
+to avoid (de)allocations in the critical sections in init and destroy.
+Thus, in the critical sections we only swap out the `struct kkv_inner`
+and set the `initialized` field, all simple `memcpy`s.
+We do the actual allocation before and deallocation after.
+This does mean sometimes we can waste a buckets allocation in init
+if it gets initialized between then and acquiring the write lock.
+
+We refactored the rw-locking into
+```
+bool kkv_lock(struct kkv *this, bool write, bool expecting_initialized);
+```
+since we do double-checked locking (to greatly reduce the times we need to lock).
+
+We also converted most fallible functions to use goto for error-handling,
+since that made it much easier to keep track of the multiple error states.
 
 ##### Tests
 
