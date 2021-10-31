@@ -27,10 +27,8 @@ def benchmark(f: Callable) -> Callable:
 
 def entry_allocation_test(i: int):
     key = i
-    value = ""
-    kkv.put(key=key, value=value)
-    response = kkv.get(key=key, len=len(value))
-    assert response == value
+    kkv.sys_put(key, None, 0, 0)
+    kkv.sys_get(key, None, 0, 0)
 
 
 @benchmark
