@@ -132,7 +132,9 @@ TODO
 
 See part1 for our shared python test code.
 
-TODO
+We used our tests to mark the benchmark for a larger number of memory allocations.
+We used the minimal value (None) in order to best compare the results so that we would primarily be looking at the memory allocation, for regular kmalloc vs the cache mem allocation.
+In our results, we saw that while the results for large memory allocations were comporable, there was a slight difference when it came to larger amounts of memory allocation
 
 To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
 
