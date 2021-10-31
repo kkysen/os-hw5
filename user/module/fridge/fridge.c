@@ -488,7 +488,8 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		if (!entry) {
 			adding = true;
 			entry = new_entry;
-			kkv_ht_entry_init(entry);
+			/* already initialized by the slab cache */
+			/* kkv_ht_entry_init(entry); */
 			kkv_ht_bucket_add(bucket, entry);
 		}
 		tmp = entry->kv_pair;
@@ -500,9 +501,9 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	goto free_entry;
 
 free_entry:
+	/* TODO need inner lock for this */
 	if (!adding)
 		kmem_cache_free(this->inner.cache, new_entry);
-	/* TODO need inner lock for this */
 pair_free:
 	kkv_pair_free(&pair);
 ret:
