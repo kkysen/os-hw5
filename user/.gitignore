@@ -1,3 +1,5 @@
 *.o
 *.a
 core.*
+*.pyc
+__pycache__/

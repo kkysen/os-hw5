@@ -13,6 +13,11 @@ PHONY += test-all
 test-all:
 	../con-ed/simple_sequential
 	../con-ed/hot_potato 1000
+	../con-ed/blocking_simple
+	../con-ed/blocking_signal
 	../FireFerrises-p1-test/tests.py
+	../FireFerrises-p2-test/tests.py
+	../FireFerrises-p3-test/tests.py
+	../FireFerrises-p4-test/tests.py
 
 .PHONY: $(PHONY)

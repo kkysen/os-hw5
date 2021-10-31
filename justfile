@@ -29,8 +29,9 @@ install-program-dependencies:
     cargo quickinstall gitui
 
 parallel-bash-commands:
-    -rg '^(.*)$' --replace '$1 &' --color never
-    echo wait
+    echo 'pids=()'
+    -rg '^(.*)$' --replace '$1 &'$'\n''pids+=($!)' --color never
+    echo 'for pid in ${pids[@]}; do wait $pid; done'
 
 sequential-bash:
     bash
@@ -229,6 +230,8 @@ run-mod mod_path *args: (run-mod-only mod_path args)
 
 test *args: (run-mod default_mod_path args)
 
+test-part part_name: (test "just" "make-in" "user/test/FireFerrises-p" + part_name + "-test" "test-all")
+
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
 
@@ -406,3 +409,10 @@ trace-exec *args:
     -strace -etrace=execve -f --string-limit 10000 -qq --output strace.$PPID.out {{args}}
     just filter-exec < strace.$PPID.out
     rm strace.$PPID.out
+
+rename-branch old_name new_name:
+    git checkout "{{old_name}}"
+    git branch --move "{{new_name}}"
+    git push origin --set-upstream "{{new_name}}"
+    git push origin --delete "{{old_name}}"
+    git checkout -

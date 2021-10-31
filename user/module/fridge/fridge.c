@@ -24,45 +24,29 @@
 
 #define MODULE_NAME "Fridge"
 
-static long kkv_init(int flags);
-static long kkv_destroy(int flags);
-static long kkv_put(u32 key, const void *val, size_t size, int flags);
-static long kkv_get(u32 key, void *val, size_t size, int flags);
+#define MUST_USE __attribute__((warn_unused_result))
 
 extern long (*kkv_init_ptr)(int flags);
 extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);
 extern long (*kkv_get_ptr)(u32 key, void *val, size_t size, int flags);
 
-struct kem_cache *kkv_cache;
+struct kkv_buckets {
+	struct kkv_ht_bucket *ptr;
+	size_t len;
+	u8 len_bits;
+};
 
-int fridge_init(void)
-{
-	pr_info("Installing fridge\n");
-	kkv_init_ptr = kkv_init;
-	kkv_destroy_ptr = kkv_destroy;
-	kkv_put_ptr = kkv_put;
-	kkv_get_ptr = kkv_get;
-	kkv_cache = kmem_cache_create();
-	return 0;
-}
+struct kkv_inner {
+	struct kkv_buckets buckets;
+	struct kmem_cache *cache;
+};
 
-void fridge_exit(void)
-{
-	pr_info("Removing fridge\n");
-	kkv_get_ptr = NULL;
-	kkv_put_ptr = NULL;
-	kkv_destroy_ptr = NULL;
-	kkv_init_ptr = NULL;
-	kmem_cache_destroy(kkv_cache);
-}
-
-module_init(fridge_init);
-module_exit(fridge_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION(MODULE_NAME);
-MODULE_AUTHOR("FireFerrises");
+struct kkv {
+	struct kkv_inner inner;
+	bool initialized;
+	rwlock_t lock; /* guards initialized */
+};
 
 static void kkv_pair_init(struct kkv_pair *this)
 {
@@ -73,23 +57,21 @@ static void kkv_pair_init(struct kkv_pair *this)
 
 static void kkv_pair_free(struct kkv_pair *this)
 {
-	//kfree(this->val);
-	kmem_cache_free(kkv_cache, this->val);
+	kfree(this->val);
 	/* Not really necessary, but a bit safer and can be easier to debug. */
 	this->val = NULL;
 	this->size = 0;
 	this->key = (u32)-1;
 }
 
-static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
-				    const void *user_val, size_t size)
+static MUST_USE long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
+					     const void *user_val, size_t size)
 {
 	this->val = kmalloc(size, GFP_KERNEL);
 	if (!this->val)
 		return -ENOMEM;
 	if (copy_from_user(this->val, user_val, size) != 0) {
-		//kfree(this->val);
-		kmem_cache_free(kkv_cache, this->val);
+		kfree(this->val);
 		return -EFAULT;
 	}
 	this->key = key;
@@ -97,8 +79,8 @@ static long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 	return 0;
 }
 
-static long kkv_pair_copy_to_user(struct kkv_pair *this, void *user_val,
-				  size_t user_size)
+static MUST_USE long kkv_pair_copy_to_user(struct kkv_pair *this,
+					   void *user_val, size_t user_size)
 {
 	/* The user tried to copy more bytes from kernel, just truncate it.
 	 * If the user copies fewer bytes, return what they asked for,
@@ -136,35 +118,35 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 	};
 }
 
-static void kkv_ht_bucket_free(struct kkv_ht_bucket *this)
+/* Return number of entries freed. */
+static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
+					  struct kmem_cache *cache)
 {
 	struct kkv_ht_entry *entry;
 	struct kkv_ht_entry *tmp;
+	size_t n;
 
+	n = 0;
 	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
-		//kfree(entry);
-		kmem_cache_free(kkv_cache, entry);
+		kmem_cache_free(cache, entry);
 		this->count--;
+		n++;
 	}
 
 	/* spinlocks don't need to be freed */
+
+	return n;
 }
 
-struct kkv_buckets {
-	struct kkv_ht_bucket *ptr;
-	size_t len;
-	u8 len_bits;
-};
-
-static void kkv_buckets_for__each(struct kkv_buckets *this,
-				  void (*f)(struct kkv_ht_bucket *bucket))
+static MUST_USE struct kkv_buckets kkv_buckets_new(void)
 {
-	size_t i;
-
-	for (i = 0; i < this->len; i++)
-		f(&this->ptr[i]);
+	return (struct kkv_buckets){
+		.ptr = NULL,
+		.len = 0,
+		.len_bits = 0,
+	};
 }
 
 static u8 num_bits_used(size_t n)
@@ -179,8 +161,11 @@ static u8 num_bits_used(size_t n)
 	return max_bits;
 }
 
-static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
+static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 {
+	size_t i;
+	struct kkv_ht_bucket *bucket;
+
 	this->ptr = kmalloc_array(len, sizeof(*this->ptr), GFP_KERNEL);
 	if (!this->ptr) {
 		this->len = 0;
@@ -189,32 +174,48 @@ static long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 	}
 	this->len = len;
 	this->len_bits = num_bits_used(len);
-	kkv_buckets_for__each(this, kkv_ht_bucket_init);
+	for (i = 0; i < this->len; i++) {
+		bucket = &this->ptr[i];
+		kkv_ht_bucket_init(bucket);
+	}
 	return 0;
 }
 
-static void kkv_buckets_free(struct kkv_buckets *this)
+/* Return number of entries freed. */
+static MUST_USE size_t kkv_buckets_free(struct kkv_buckets *this,
+					struct kmem_cache *cache)
 {
-	kkv_buckets_for__each(this, kkv_ht_bucket_free);
+	size_t i;
+	struct kkv_ht_bucket *bucket;
+	size_t n;
+
+	n = 0;
+	for (i = 0; i < this->len; i++) {
+		bucket = &this->ptr[i];
+		n += kkv_ht_bucket_free(bucket, cache);
+	}
+
 	this->len_bits = 0;
 	this->len = 0;
-	//kfree(this->ptr);
-	kmem_cache_free(kkv_cache, this->ptr);
+	kfree(this->ptr);
 	this->ptr = NULL;
+
+	return n;
 }
 
-static u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
+static MUST_USE u32 kkv_buckets_index(const struct kkv_buckets *this, u32 key)
 {
 	return hash_32(key, this->len_bits) % this->len;
 }
 
-static struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this, u32 key)
+static MUST_USE struct kkv_ht_bucket *kkv_buckets_get(struct kkv_buckets *this,
+						      u32 key)
 {
 	return &this->ptr[kkv_buckets_index(this, key)];
 }
 
-static struct kkv_ht_entry *kkv_ht_bucket_find(const struct kkv_ht_bucket *this,
-					       u32 key)
+static MUST_USE struct kkv_ht_entry *
+kkv_ht_bucket_find(const struct kkv_ht_bucket *this, u32 key)
 {
 	struct kkv_ht_entry *entry;
 
@@ -239,71 +240,204 @@ static void kkv_ht_bucket_remove(struct kkv_ht_bucket *this,
 	list_del(&entry->entries);
 }
 
-struct kkv {
-	struct kkv_buckets buckets;
-	rwlock_t lock; /* guards buckets (buckets.ptr) */
-};
-
-static long kkv_lock(struct kkv *this, bool write, bool expecting_initialized)
+static MUST_USE struct kkv_inner kkv_inner_new(void)
 {
-	if (!!this->buckets.ptr ^ expecting_initialized) {
-		/**
-		 * Already initialized.
-		 * First check before lock so we avoid lock in most cases.
-		 */
-		return -EPERM;
+	return (struct kkv_inner){
+		.buckets = kkv_buckets_new(),
+		.cache = NULL,
+	};
+}
+
+static MUST_USE long kkv_inner_init(struct kkv_inner *this, size_t len)
+{
+	long e;
+
+	e = 0;
+
+	this->cache =
+		kmem_cache_create("kkv_ht_entry", sizeof(struct kkv_ht_entry),
+				  __alignof__(struct kkv_ht_entry), 0,
+				  (void (*)(void *))kkv_ht_entry_init);
+
+	e = kkv_buckets_init(&this->buckets, len);
+	if (e < 0)
+		goto ret;
+	goto ret;
+
+ret:
+	return e;
+}
+
+/* Return number of entries freed. */
+static MUST_USE size_t kkv_inner_free(struct kkv_inner *this)
+{
+	size_t n;
+
+	n = kkv_buckets_free(&this->buckets, this->cache);
+	kmem_cache_destroy(this->cache);
+
+	return n;
+}
+
+static MUST_USE struct kkv kkv_new(void)
+{
+	return (struct kkv){
+		.inner = kkv_inner_new(),
+		.initialized = false,
+		.lock = __RW_LOCK_UNLOCKED(),
+	};
+}
+
+/* Return if the lock was acquired. */
+static MUST_USE bool kkv_lock(struct kkv *this, bool write,
+			      bool expecting_initialized)
+{
+	bool fail_fast;
+	bool locked;
+
+	/**
+	 * Fail fast on writes, b/c they can be starved,
+	 * and it doesn't reduce get/put concurrency, which are reads.
+	 */
+	fail_fast = write;
+	locked = false;
+
+	/**
+	 * If we want to fail fast and notify the user
+	 * that they are using the kkv API wrong,
+	 * i.e., interspersing kkv_get/kkv_put calls
+	 * with kkv_init/kkv_destroy calls,
+	 * we shouldn't only trylock here and return EPERM immediately.
+	 *
+	 * On the other hand, we can also lock
+	 * and succeed if the initialized state is correct after,
+	 * i.e. a kkv_put waiting for a kkv_init, for example.
+	 */
+	if (fail_fast) {
+		if (this->initialized ^ expecting_initialized) {
+			/**
+			 * Already initialized.
+			 * First check before lock so we avoid lock in most cases.
+			 */
+			goto ret;
+		}
+		if (!(write ? write_trylock(&this->lock) :
+				    read_trylock(&this->lock))) {
+			/**
+			 * If we can't get the lock,
+			 * then init or destroy are being called currently,
+			 * which is not when you're supposed to call anything else.
+			 */
+			goto ret;
+		}
+	} else {
+		write ? write_lock(&this->lock) : read_lock(&this->lock);
 	}
-	if (!(write ? write_trylock(&this->lock) : read_trylock(&this->lock))) {
-		/**
-		 * If we can't get the lock,
-		 * then init or destroy are being called currently,
-		 * which is not when you're supposed to call anything else.
-		 */
-		return -EPERM;
-	}
-	if (!!this->buckets.ptr ^ expecting_initialized) {
+	if (this->initialized ^ expecting_initialized) {
 		/**
 		 * Already initialized.
 		 * Second real check while holding lock.
 		 */
-		write ? write_unlock(&this->lock) : read_unlock(&this->lock);
-		return -EPERM;
+		goto unlock;
 	}
-	return 0;
+	locked = true;
+	goto ret;
+
+unlock:
+	write ? write_unlock(&this->lock) : read_unlock(&this->lock);
+	locked = false;
+ret:
+	return locked;
 }
 
-static long kkv_init_(struct kkv *this, size_t len)
+static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 {
 	long e;
+	struct kkv_inner inner;
+	size_t _num_freed;
 
 	e = 0;
 
-	e = kkv_lock(this, /* write */ true, /* expect init */ false);
+	if (this->initialized) {
+		/**
+		 * An extra check before allocating, since that's
+		 * expensive and we'd like to avoid it if possible.
+		 */
+		e = -EPERM;
+		goto ret;
+	}
+	e = kkv_inner_init(&inner, len);
 	if (e < 0)
-		return e;
-	e = kkv_buckets_init(&this->buckets, len);
-	write_unlock(&this->lock);
+		goto ret;
 
+	if (!kkv_lock(this, /* write */ true, /* expect init */ false)) {
+		e = -EPERM;
+		/**
+		 * Unfortunately we already allocated the inner.
+		 * But nothing we can do about it since
+		 * we can't allocate in the critical section.
+		 */
+		goto inner_free;
+	}
+	{
+		/**
+		 * Critical section, which is why
+		 * we have to do the allocation before.
+		 * And only swap it in inside the critical section.
+		 * And as soon as we unlock, other threads can
+		 * start reading inner, so we can't allocate after either.
+		 */
+		this->initialized = true;
+		this->inner = inner;
+	}
+	write_unlock(&this->lock);
+	goto ret;
+
+inner_free:
+	_num_freed = kkv_inner_free(&inner);
+	/* should be zero */
+ret:
 	return e;
 }
 
-static long kkv_free(struct kkv *this)
+/* Return number of entries freed. */
+static MUST_USE long kkv_free(struct kkv *this)
 {
 	long e;
+	struct kkv_inner inner;
 
 	e = 0;
 
-	e = kkv_lock(this, /* write */ true, /* expect init */ false);
-	if (e < 0)
-		return e;
-	kkv_buckets_free(&this->buckets);
+	if (!kkv_lock(this, /* write */ true, /* expect init */ true)) {
+		e = -EPERM;
+		goto ret;
+	}
+	{
+		/**
+		 * Critical section, so we can't do the deallocation here.
+		 * So we set initialized to false so other threads
+		 * don't try to access it, and we swap out inner
+		 * so that we can free it before another thread tries
+		 * to re-initialize it.
+		 */
+		this->initialized = false;
+		inner = this->inner;
+		this->inner = kkv_inner_new();
+	}
 	write_unlock(&this->lock);
+	/**
+	 * Now inner is detached any only accessible here,
+	 * so we can free it without holding the lock.
+	 */
+	e = (long)kkv_inner_free(&inner);
+	goto ret;
 
+ret:
 	return e;
 }
 
-static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
-		     size_t user_size, int flags)
+static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
+			      size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
@@ -311,34 +445,38 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	struct kkv_pair pair;
 	bool adding;
 
-	if (flags != 0)
-		return -EINVAL;
+	e = 0;
+
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	/* Allocates, so put it before critical section. */
 	e = kkv_pair_init_from_user(&pair, key, user_val, user_size);
 	if (e < 0)
-		return e;
+		goto ret;
 
-	/* Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
+	/**
+	 * Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
 	 * and we don't know if we need to alloc until we see if the entry is already there,
 	 * but we need to lock the bucket to do that.
 	 * At least this will be more efficient with a slab cache later.
 	 */
-	//new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-	new_entry = kmem_cache_alloc(kkv_cache, GFP_KERNEL)
+	/* TODO need inner lock for this */
+	new_entry = kmem_cache_alloc(this->inner.cache, GFP_KERNEL);
 	if (!new_entry) {
-		kkv_pair_free(&pair);
-		printk(KERN_ERR "new kmem alloc failed");
-		return -ENOMEM;
+		e = -ENOMEM;
+		goto pair_free;
+	}
+	adding = false;
+
+	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
+		e = -EPERM;
+		goto free_entry;
 	}
 
-	/*check to ensure no read or write*/
-	e = kkv_lock(this, /* write */ false, /* expect init */ true);
-	if (e < 0)
-		return e;
-	read_lock(&this->lock);
-
-	bucket = kkv_buckets_get(&this->buckets, key);
+	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
@@ -347,8 +485,8 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 		struct kkv_pair tmp;
 
 		entry = kkv_ht_bucket_find(bucket, key);
-		adding = !entry;
-		if (adding) {
+		if (!entry) {
+			adding = true;
 			entry = new_entry;
 			kkv_ht_entry_init(entry);
 			kkv_ht_bucket_add(bucket, entry);
@@ -359,40 +497,46 @@ static long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
+	goto free_entry;
 
+free_entry:
 	if (!adding)
-		//kfree(new_entry);
-		kmem_cache_free(kkv_cache, new_entry);
+		kmem_cache_free(this->inner.cache, new_entry);
+	/* TODO need inner lock for this */
+pair_free:
 	kkv_pair_free(&pair);
-
-	return 0;
+ret:
+	return e;
 }
 
-static long kkv_get_(struct kkv *this, u32 key, void *user_val,
-		     size_t user_size, int flags)
+static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
+			      size_t user_size, int flags)
 {
 	long e;
 	struct kkv_ht_bucket *bucket;
 	struct kkv_ht_entry *entry;
 
-	if (flags != KKV_NONBLOCK)
-		return -EINVAL;
+	e = 0;
 
-	bucket = kkv_buckets_get(&this->buckets, key);
+	if (flags != KKV_NONBLOCK) {
+		e = -EINVAL;
+		goto ret;
+	}
 
-	//check to ensure no read or write
-	e = kkv_lock(this, /* write */ false, /* expect init */ true);
-	if (e < 0)
-		return e;
+	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
+		e = -EPERM;
+		goto ret;
+	}
 
-	read_lock(&this->lock);
+	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
 	spin_lock(&bucket->lock);
 	{
 		/* Critical section: no allocs. */
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
-			/* `entry` removed but not freed; do that outside critical section.
+			/**
+			 * `entry` removed but not freed; do that outside critical section.
 			 * But since it's been removed, no one else has a reference to it anymore,
 			 * so we can modify it more later.
 			 */
@@ -402,23 +546,25 @@ static long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
 
-	if (!entry)
-		return -ENOENT;
-
+	if (!entry) {
+		e = -ENOENT;
+		goto free_entry;
+	}
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
-	/* Free before returning the error. */
-	kkv_ht_entry_free(entry);
-	//kfree(entry);
-	kmem_cache_free(kkv_cache, entry);
-	if (e < 0)
-		return e;
+	goto entry_free;
 
-	return 0;
+entry_free:
+	kkv_ht_entry_free(entry);
+free_entry:
+	/* TODO need inner lock for this */
+	kmem_cache_free(this->inner.cache, entry);
+ret:
+	return e;
 }
 
 static struct kkv kkv;
 
-/*
+/**
  * Initialize the Kernel Key-Value store.
  *
  * Returns 0 on success.
@@ -428,21 +574,27 @@ static struct kkv kkv;
  * The result of initializing twice (without an intervening
  * kkv_destroy() call) is undefined.
  */
-static long kkv_init(int flags)
+static MUST_USE long kkv_init(int flags)
 {
 	long e;
 
-	if (flags != 0)
-		return -EINVAL;
+	e = 0;
+
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
 
 	e = kkv_init_(&kkv, HASH_TABLE_LENGTH);
 	if (e < 0)
-		return e;
+		goto ret;
+	goto ret;
 
-	return 0;
+ret:
+	return e;
 }
 
-/*
+/**
  * Destroy the Kernel Key-Value store, removing all entries
  * and deallocating all memory.
  *
@@ -455,17 +607,27 @@ static long kkv_init(int flags)
  *
  * The result of destroying before initializing is undefined.
  */
-static long kkv_destroy(int flags)
+static MUST_USE long kkv_destroy(int flags)
 {
-	if (flags != 0)
-		return -EINVAL;
+	long e;
 
-	kkv_free(&kkv);
+	e = 0;
 
-	return 0;
+	if (flags != 0) {
+		e = -EINVAL;
+		goto ret;
+	}
+
+	e = kkv_free(&kkv);
+	if (e < 0)
+		goto ret;
+	goto ret;
+
+ret:
+	return e;
 }
 
-/*
+/**
  * Insert a new key-value pair. The previous value for the key, if any, is
  * replaced by the new value.
  *
@@ -483,12 +645,12 @@ static long kkv_destroy(int flags)
  * The result of calling kkv_put() before initializing the Kernel
  * Key-Value store is undefined.
  */
-static long kkv_put(u32 key, const void *val, size_t size, int flags)
+static MUST_USE long kkv_put(u32 key, const void *val, size_t size, int flags)
 {
 	return kkv_put_(&kkv, key, val, size, flags);
 }
 
-/*
+/**
  * If a key-value pair is found for the given key, the pair is
  * REMOVED from the Kernel Key-Value store.
  *
@@ -506,7 +668,41 @@ static long kkv_put(u32 key, const void *val, size_t size, int flags)
  * The result of calling kkv_get() before initializing the Kernel Key-Value
  * store is undefined.
  */
-static long kkv_get(u32 key, void *val, size_t size, int flags)
+static MUST_USE long kkv_get(u32 key, void *val, size_t size, int flags)
 {
 	return kkv_get_(&kkv, key, val, size, flags);
 }
+
+int fridge_init(void)
+{
+	pr_info("Installing fridge\n");
+	kkv = kkv_new();
+	kkv_init_ptr = kkv_init;
+	kkv_destroy_ptr = kkv_destroy;
+	kkv_put_ptr = kkv_put;
+	kkv_get_ptr = kkv_get;
+	return 0;
+}
+
+void fridge_exit(void)
+{
+	long e_;
+
+	pr_info("Removing fridge\n");
+	kkv_get_ptr = NULL;
+	kkv_put_ptr = NULL;
+	kkv_destroy_ptr = NULL;
+	kkv_init_ptr = NULL;
+	/**
+	 * Destroy in case the user forgot so we don't leak anything.
+	 * It's also okay if it returns an error; we don't care.
+	 */
+	e_ = kkv_free(&kkv);
+}
+
+module_init(fridge_init);
+module_exit(fridge_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION(MODULE_NAME);
+MODULE_AUTHOR("FireFerrises");
