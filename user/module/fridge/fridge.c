@@ -57,25 +57,43 @@ static void kkv_pair_init(struct kkv_pair *this)
 
 static void kkv_pair_free(struct kkv_pair *this)
 {
-	kfree(this->val);
+	if (this->size != 0) {
+		kfree(this->val);
+		this->val = NULL;
+		this->size = 0;
+	}
 	/* Not really necessary, but a bit safer and can be easier to debug. */
-	this->val = NULL;
-	this->size = 0;
 	this->key = (u32)-1;
 }
 
 static MUST_USE long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 					     const void *user_val, size_t size)
 {
-	this->val = kmalloc(size, GFP_KERNEL);
-	if (!this->val)
-		return -ENOMEM;
-	if (copy_from_user(this->val, user_val, size) != 0) {
-		kfree(this->val);
-		return -EFAULT;
+	long e;
+
+	e = 0;
+
+	if (size == 0) {
+		this->val = NULL;
+	} else {
+		this->val = kmalloc(size, GFP_KERNEL);
+		if (!this->val) {
+			e = -ENOMEM;
+			goto ret;
+		}
+		if (copy_from_user(this->val, user_val, size) != 0) {
+			e = -EFAULT;
+			goto free_val;
+		}
 	}
+
 	this->key = key;
 	this->size = size;
+	goto ret;
+
+free_val:
+	kfree(this->val);
+ret:
 	return 0;
 }
 
