@@ -148,12 +148,17 @@ and regular `kmalloc` allocations for the values wouldn't hide anything.
 Even with entry allocations dominating, though,
 sometimes the part2 module would be slightly faster
 and sometimes the part3 module would be faster.
-`kmalloc` is probably already optimized for small allocations like for
-`struct kkv_ht_entry`, which is only 72 bytes, so we're guessing that's why
-there wasn't a major difference in performance.
-We also don't know how much of the time was from
-syscall (context-switch) and locking overhead,
-since a whole context-switch to allocate just 72 bytes is very wasteful.
+
+We thought this might be because `kmalloc` is probably already optimized
+for small allocations like for `struct kkv_ht_entry`, which is only 72 bytes,
+so we were guessing that's why there wasn't a major difference in performance.
+But we tried adding a `char big[4000]` field to `struct kkv_ht_entry`
+so that it's almost as large as a page (4072 vs. 4096),
+but that didn't even make any difference.
+
+Thus we are guessing it's either from syscall (context-switch) or locking overhead.
+More likely the context-switch, since a whole context-switch
+to allocate just 72 bytes is very wasteful.
 
 To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
 This just times the entry allocation heavy test.
