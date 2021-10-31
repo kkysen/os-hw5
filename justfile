@@ -75,13 +75,25 @@ make-non-kernel *args: (make-user args)
 
 make-kernel *args: (make-in "linux" args)
 
-set-config-flag name value:
-    sd '^(CONFIG_{{name}})=(.*)$' '$1={{value}}' linux/.config
-
 modify-config:
-    just set-config-flag LOCALVERSION "\"-$(just get-git-uni)-fridge\""
-    just set-config-flag BLK_DEV_LOOP y
-    just set-config-flag SYSTEM_TRUSTED_KEYS ""
+    ./linux/scripts/config --file linux/.config \
+        --set-str LOCALVERSION "\"-$(just get-git-uni)-fridge\"" \
+        --enable BLK_DEV_LOOP \
+        --set-val SYSTEM_TRUSTED_KEYS '' \
+        --enable STACKTRACE \
+        --enable KASAN \
+        --enable KASAN_GENERIC \
+        --enable KASAN_INLINE \
+        --disable KASAN_VMALLOC \
+        --disable TEST_KASAN_MODULE \
+        --enable UBSAN \
+        --disable UBSAN_TRAP \
+        --enable UBSAN_BOUNDS \
+        --enable UBSAN_MISC \
+        --disable UBSAN_SANITIZE_ALL \
+        --disable UBSAN_ALIGNMENT \
+        --disable TEST_UBSAN \
+        --disable RANDOMIZE_BASE
 
 generate-config: && modify-config
     yes '' | just make-kernel localmodconfig
