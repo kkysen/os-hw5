@@ -26,6 +26,7 @@ struct kkv_ht_entry {
 	struct kkv_pair kv_pair;
 	wait_queue_head_t q;		/* only for part 4 (empty fridge) */
 	uint32_t q_count;		/* only for part 4 (empty fridge) */
+	char big[4000];
 };
 
 /*
