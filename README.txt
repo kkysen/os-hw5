@@ -6,8 +6,9 @@ Isabelle Arevalo, ia2422
 
 ### part1
 
-##### Module
 This part is working.
+
+##### Module
 
 In `fridge_init` and `fridge_exit`, we set and unset the kkv syscall pointers, respectively.
 
@@ -28,6 +29,7 @@ In `kkv_get`, we do largely the opposite,
 except here we do all the frees after the critical section.
 
 ##### Tests
+
 We added Python (3) tests in `tests.py` to ensure that the spin lock is accurate
 between getting and putting the same key into the bucket/linked list
 and that they do not conflict with each other.
@@ -48,12 +50,51 @@ To run the tests, run `make test` in `user/test/FireFerrises-p1-test/`.
 
 
 ### part2
+
+This part is working.
+
+##### Module
+
 TODO
+
+##### Tests
+
+See part1 for our shared python test code.
+
+TODO
+
+To run the tests, run `make test` in `user/test/FireFerrises-p2-test/`.
 
 
 ### part3
+
+This part is TODO.
+
+##### Module
+
 TODO
+
+##### Tests
+
+See part1 for our shared python test code.
+
+TODO
+
+To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
 
 
 ### part4
+
+This part is TODO.
+
+##### Module
+
 TODO
+
+##### Tests
+
+See part1 for our shared python test code.
+
+TODO
+
+To run the tests, run `make test` in `user/test/FireFerrises-p4-test/`.
