@@ -240,10 +240,10 @@ log *args:
 
 log-watch *args: (log "--follow-new" args)
 
-run-mod-priv mod_path *args:
+run-mod mod_path *args:
     #!/usr/bin/env bash
     just log | wc -l > log.length
-    kedr start "{{mod_path}}"
+    sudo kedr start "{{mod_path}}"
     echo "running $(tput setaf 2){{file_stem(mod_path)}}$(tput sgr 0):"
     just load-mod "{{mod_path}}"
     {{args}}
@@ -253,12 +253,7 @@ run-mod-priv mod_path *args:
     exit
     cd /sys/kernel/debug/kedr_leak_check
     bat --paging never info possible_leaks unallocated_frees
-    kedr stop
-
-run-mod-only mod_path *args:
-    sudo env "PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin" just run-mod-priv "{{mod_path}}" {{args}}
-
-run-mod mod_path *args: (run-mod-only mod_path args)
+    sudo kedr stop
 
 test *args: (run-mod default_mod_path args)
 
