@@ -122,19 +122,47 @@ and that should trigger that response.
 
 ### part3
 
-This part is TODO.
+This part is working.
 
 ##### Module
 
-TODO
+A cache is created on module init and destroyed on module destroy (stored in `struct kkv`).
+We replaced our calls to `kmalloc` and `kfree` for each of the entries
+with calls to `kmem_cache_alloc` and `kmem_cache_free` using the cache.
+This was done to improve the speed and efficiency of the program
+because we are able to allocate directly from the pre-allocated cache,
+which knows the size of the entry already, instead of needing to
+specify the size each time with `kmalloc` from the kernel,
+meaning it can't size-optimize it as well.
+
+We also needed to avoid calling `kmem_cache_free(NULL)` (`kfree(NULL)` works).
 
 ##### Tests
 
 See part1 for our shared python test code.
 
-TODO
+We used our tests to benchmark with a larger number of memory allocations.
+We used set the user value length to 0 in order to avoid value allocation,
+so that we would primarily be looking at the `struct kkv_ht_entry` memory allocations,
+and regular `kmalloc` allocations for the values wouldn't hide anything.
+Even with entry allocations dominating, though,
+sometimes the part2 module would be slightly faster
+and sometimes the part3 module would be faster.
+
+We thought this might be because `kmalloc` is probably already optimized
+for small allocations like for `struct kkv_ht_entry`, which is only 72 bytes,
+so we were guessing that's why there wasn't a major difference in performance.
+But we tried adding a `char big[4000]` field to `struct kkv_ht_entry`
+so that it's almost as large as a page (4072 vs. 4096),
+but that didn't even make any difference.
+
+Thus we are guessing it's either from syscall (context-switch) or locking overhead.
+More likely the context-switch, since a whole context-switch
+to allocate just 72 bytes is very wasteful.
 
 To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
+This just times the entry allocation heavy test.
+We also tried benchmarking it through `hyperfine` to avoid outliers.
 
 
 ### part4

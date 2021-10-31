@@ -45,6 +45,7 @@ struct kkv {
 	struct kkv_inner inner;
 	bool initialized;
 	rwlock_t lock; /* guards initialized */
+	struct kmem_cache *cache;
 };
 
 static void kkv_pair_init(struct kkv_pair *this)
@@ -136,7 +137,8 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 }
 
 /* Return number of entries freed. */
-static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this)
+static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
+					  struct kmem_cache *cache)
 {
 	struct kkv_ht_entry *entry;
 	struct kkv_ht_entry *tmp;
@@ -146,7 +148,7 @@ static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this)
 	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
 		kkv_ht_entry_free(entry);
 		list_del(&entry->entries);
-		kfree(entry);
+		kmem_cache_free(cache, entry);
 		this->count--;
 		n++;
 	}
@@ -198,7 +200,8 @@ static MUST_USE long kkv_buckets_init(struct kkv_buckets *this, size_t len)
 }
 
 /* Return number of entries freed. */
-static MUST_USE size_t kkv_buckets_free(struct kkv_buckets *this)
+static MUST_USE size_t kkv_buckets_free(struct kkv_buckets *this,
+					struct kmem_cache *cache)
 {
 	size_t i;
 	struct kkv_ht_bucket *bucket;
@@ -207,7 +210,7 @@ static MUST_USE size_t kkv_buckets_free(struct kkv_buckets *this)
 	n = 0;
 	for (i = 0; i < this->len; i++) {
 		bucket = &this->ptr[i];
-		n += kkv_ht_bucket_free(bucket);
+		n += kkv_ht_bucket_free(bucket, cache);
 	}
 
 	this->len_bits = 0;
@@ -264,13 +267,24 @@ static MUST_USE struct kkv_inner kkv_inner_new(void)
 
 static MUST_USE long kkv_inner_init(struct kkv_inner *this, size_t len)
 {
-	return kkv_buckets_init(&this->buckets, len);
+	long e;
+
+	e = 0;
+
+	e = kkv_buckets_init(&this->buckets, len);
+	if (e < 0)
+		goto ret;
+	goto ret;
+
+ret:
+	return e;
 }
 
 /* Return number of entries freed. */
-static MUST_USE size_t kkv_inner_free(struct kkv_inner *this)
+static MUST_USE size_t kkv_inner_free(struct kkv_inner *this,
+				      struct kmem_cache *cache)
 {
-	return kkv_buckets_free(&this->buckets);
+	return kkv_buckets_free(&this->buckets, cache);
 }
 
 static MUST_USE struct kkv kkv_new(void)
@@ -279,6 +293,7 @@ static MUST_USE struct kkv kkv_new(void)
 		.inner = kkv_inner_new(),
 		.initialized = false,
 		.lock = __RW_LOCK_UNLOCKED(),
+		.cache = NULL,
 	};
 }
 
@@ -388,7 +403,8 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 	goto ret;
 
 inner_free:
-	_num_freed = kkv_inner_free(&inner);
+	/* shouldn't actually need the cache */
+	_num_freed = kkv_inner_free(&inner, this->cache);
 	/* should be zero */
 ret:
 	return e;
@@ -423,7 +439,7 @@ static MUST_USE long kkv_free(struct kkv *this)
 	 * Now inner is detached any only accessible here,
 	 * so we can free it without holding the lock.
 	 */
-	e = (long)kkv_inner_free(&inner);
+	e = (long)kkv_inner_free(&inner, this->cache);
 	goto ret;
 
 ret:
@@ -457,7 +473,7 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	 * but we need to lock the bucket to do that.
 	 * At least this will be more efficient with a slab cache later.
 	 */
-	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
+	new_entry = kmem_cache_alloc(this->cache, GFP_KERNEL);
 	if (!new_entry) {
 		e = -ENOMEM;
 		goto pair_free;
@@ -494,7 +510,7 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 
 free_entry:
 	if (!adding)
-		kfree(new_entry);
+		kmem_cache_free(this->cache, new_entry);
 pair_free:
 	kkv_pair_free(&pair);
 ret:
@@ -547,7 +563,7 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 free_entry:
 	kkv_ht_entry_free(entry);
-	kfree(entry);
+	kmem_cache_free(this->cache, entry);
 ret:
 	return e;
 }
@@ -663,31 +679,65 @@ static MUST_USE long kkv_get(u32 key, void *val, size_t size, int flags)
 	return kkv_get_(&kkv, key, val, size, flags);
 }
 
+static MUST_USE int kkv_module_init(struct kkv *this)
+{
+	int e;
+
+	e = 0;
+
+	*this = kkv_new();
+	this->cache = KMEM_CACHE(kkv_ht_entry, 0);
+	if (!this->cache) {
+		e = -ENOMEM;
+		goto ret;
+	}
+	goto ret;
+
+ret:
+	return e;
+}
+
+static void kkv_module_free(struct kkv *this)
+{
+	int _e;
+
+	/**
+	 * Destroy in case the user forgot so we don't leak anything.
+	 * It's also okay if it returns an error; we don't care.
+	 */
+	_e = kkv_free(this);
+	kmem_cache_destroy(this->cache);
+}
+
 int fridge_init(void)
 {
+	int e;
+
+	e = 0;
+
 	pr_info("Installing fridge\n");
-	kkv = kkv_new();
+	e = kkv_module_init(&kkv);
+	if (e < 0)
+		goto ret;
+
 	kkv_init_ptr = kkv_init;
 	kkv_destroy_ptr = kkv_destroy;
 	kkv_put_ptr = kkv_put;
 	kkv_get_ptr = kkv_get;
-	return 0;
+	goto ret;
+
+ret:
+	return e;
 }
 
 void fridge_exit(void)
 {
-	long e_;
-
 	pr_info("Removing fridge\n");
 	kkv_get_ptr = NULL;
 	kkv_put_ptr = NULL;
 	kkv_destroy_ptr = NULL;
 	kkv_init_ptr = NULL;
-	/**
-	 * Destroy in case the user forgot so we don't leak anything.
-	 * It's also okay if it returns an error; we don't care.
-	 */
-	e_ = kkv_free(&kkv);
+	kkv_module_free(&kkv);
 }
 
 module_init(fridge_init);
