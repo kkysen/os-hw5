@@ -42,10 +42,13 @@ def init_and_put_test(i: int):
     key = i
     value = "hello world\n" * i
     # print(f"key = {key}")
-    kkv.init()
-    kkv.put(key=key, value=value)
-    response = kkv.get(key=key, len=len(value))
-    assert response == value
+    try:
+        kkv.init()
+        kkv.put(key=key, value=value)
+        response = kkv.get(key=key, len=len(value))
+        assert response == value
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM)
 
 
 def _1b_parallel_tests():
@@ -58,9 +61,11 @@ def _1b_parallel_tests():
 
 
 def init_and_destroy(i: int):
-    kkv.init()
-    kkv.destroy()
-
+    try:
+        kkv.init()
+        kkv.destroy()
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM)
 
 def _1c_parallel_tests():
     num_processes = 100
@@ -74,11 +79,14 @@ def four_same_time(i: int):
     key = i
     value = "hello world\n" * i
     # print(f"key = {key}")
-    kkv.init()
-    kkv.put(key=key, value=value)
-    response = kkv.get(key=key, len=len(value))
-    kkv.destroy()
-    assert response == value
+    try:
+        kkv.init()
+        kkv.put(key=key, value=value)
+        response = kkv.get(key=key, len=len(value))
+        kkv.destroy()
+        assert response == value
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM) or assert_errno_eq(e.errno, ENOENT)
 
 
 def _1d_parallel_tests():
