@@ -107,6 +107,25 @@ setup-kernel: (make-kernel "mrproper") generate-config make-kernel install-kerne
 install-fridge:
     sudo -E env "PATH=${PATH}" just make-fridge install
 
+git-clone repo *args=("--recursive"):
+    cd "{{invocation_directory()}}" && \
+        command -v gh >/dev/null \
+        && gh repo clone "{{repo}}" -- {{args}} \
+        || git clone "https://github.com/{{repo}}" {{args}}
+
+reinstall-kedr:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+
+    rm -rf ~/kedr
+    just git-clone hmontero1205/kedr ~/kedr
+    cd ~/kedr/sources
+    mkdir build
+    cd build
+    cmake ..
+    make -j{{n_proc}}
+    sudo make install
+
 # Paranthesized deps to avoid checkpatch repeated word warning
 make: (pre-make) (make-non-kernel) (make-kernel)
 
