@@ -538,16 +538,14 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	if (!entry) {
 		e = -ENOENT;
-		goto free_entry;
+		goto ret;
 	}
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
-	goto entry_free;
+	goto free_entry;
 
-entry_free:
-	kkv_ht_entry_free(entry);
 free_entry:
-	/* TODO need inner lock for this */
-	kmem_cache_free(this->inner.cache, entry);
+	kkv_ht_entry_free(entry);
+	kmem_cache_free(this->cache, entry);
 ret:
 	return e;
 }
