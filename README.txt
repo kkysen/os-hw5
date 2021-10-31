@@ -167,11 +167,19 @@ We also tried benchmarking it through `hyperfine` to avoid outliers.
 
 ### part4
 
-This part is TODO.
-
 ##### Module
 
-TODO
+We looked at bootlin linux code for the references to wait queue
+and its functions as well as the powerpoint from the TAs
+given in the listserv for inspiration on how to set up part 4.
+
+In the get, when the entry is not found and the flag is BLOCK,
+we create an entry with pair val = NULL and size = 0 with the
+requested key. We then put to sleep, removing from the runqueue
+until there is a non-NULL entry put into the key.
+At that point, we wake, copy as normal, and remove.
+We initialized the waitqueue head for each entry in the init.
+We return EINTR with a signal interrupt.
 
 ##### Tests
 
