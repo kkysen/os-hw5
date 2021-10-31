@@ -239,7 +239,7 @@ benchmark branch:
     git checkout "{{branch}}"
     just make-mods
     just load-mod
-    hyperfine 'just test-part-raw 3'
+    hyperfine 'just test-part-raw 3 test'
     just unload-mod
     git checkout -
 
