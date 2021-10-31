@@ -266,6 +266,8 @@ static MUST_USE struct kkv kkv_new(void)
 	};
 }
 
+static const bool kkv_fail_fast = true;
+
 /* Return if the lock was acquired. */
 static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 			      bool expecting_initialized)
@@ -281,13 +283,29 @@ static MUST_USE bool kkv_lock(struct kkv *this, bool write,
 		 */
 		goto ret;
 	}
-	if (!(write ? write_trylock(&this->lock) : read_trylock(&this->lock))) {
-		/**
-		 * If we can't get the lock,
-		 * then init or destroy are being called currently,
-		 * which is not when you're supposed to call anything else.
-		 */
-		goto ret;
+	/**
+	 * If we want to fail fast and notify the user
+	 * that they are using the kkv API wrong,
+	 * i.e., interspersing kkv_get/kkv_put calls
+	 * with kkv_init/kkv_destroy calls,
+	 * we shouldn't only trylock here and return EPERM immediately.
+	 *
+	 * On the other hand, we can also lock
+	 * and succeed if the initialized state is correct after,
+	 * i.e. a kkv_put waiting for a kkv_init, for example.
+	 */
+	if (kkv_fail_fast) {
+		if (!(write ? write_trylock(&this->lock) :
+				    read_trylock(&this->lock))) {
+			/**
+			 * If we can't get the lock,
+			 * then init or destroy are being called currently,
+			 * which is not when you're supposed to call anything else.
+			 */
+			goto ret;
+		}
+	} else {
+		write ? write_lock(&this->lock) : read_lock(&this->lock);
 	}
 	if (this->initialized ^ expecting_initialized) {
 		/**
@@ -315,7 +333,8 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 	e = 0;
 
 	if (this->initialized) {
-		/* An extra check before allocating, since that's
+		/**
+		 * An extra check before allocating, since that's
 		 * expensive and we'd like to avoid it if possible.
 		 */
 		e = -EPERM;
@@ -327,14 +346,16 @@ static MUST_USE long kkv_init_(struct kkv *this, size_t len)
 
 	if (!kkv_lock(this, /* write */ true, /* expect init */ false)) {
 		e = -EPERM;
-		/* Unfortunately we already allocated the inner.
+		/**
+		 * Unfortunately we already allocated the inner.
 		 * But nothing we can do about it since
 		 * we can't allocate in the critical section.
 		 */
 		goto inner_free;
 	}
 	{
-		/* Critical section, which is why
+		/**
+		 * Critical section, which is why
 		 * we have to do the allocation before.
 		 * And only swap it in inside the critical section.
 		 * And as soon as we unlock, other threads can
@@ -366,7 +387,8 @@ static MUST_USE long kkv_free(struct kkv *this)
 		goto ret;
 	}
 	{
-		/* Critical section, so we can't do the deallocation here.
+		/**
+		 * Critical section, so we can't do the deallocation here.
 		 * So we set initialized to false so other threads
 		 * don't try to access it, and we swap out inner
 		 * so that we can free it before another thread tries
@@ -377,7 +399,8 @@ static MUST_USE long kkv_free(struct kkv *this)
 		this->inner = kkv_inner_new();
 	}
 	write_unlock(&this->lock);
-	/* Now inner is detached any only accessible here,
+	/**
+	 * Now inner is detached any only accessible here,
 	 * so we can free it without holding the lock.
 	 */
 	e = (long)kkv_inner_free(&inner);
@@ -408,7 +431,8 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	if (e < 0)
 		goto ret;
 
-	/* Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
+	/**
+	 * Unfortunately, need to alloc always, b/c we can't alloc in the critical section,
 	 * and we don't know if we need to alloc until we see if the entry is already there,
 	 * but we need to lock the bucket to do that.
 	 * At least this will be more efficient with a slab cache later.
@@ -471,7 +495,6 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		goto ret;
 	}
 
-	//check to ensure no read or write
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
 		e = -EPERM;
 		goto ret;
@@ -484,7 +507,8 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 		/* Critical section: no allocs. */
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
-			/* `entry` removed but not freed; do that outside critical section.
+			/**
+			 * `entry` removed but not freed; do that outside critical section.
 			 * But since it's been removed, no one else has a reference to it anymore,
 			 * so we can modify it more later.
 			 */
@@ -511,7 +535,7 @@ ret:
 
 static struct kkv kkv;
 
-/*
+/**
  * Initialize the Kernel Key-Value store.
  *
  * Returns 0 on success.
@@ -541,7 +565,7 @@ ret:
 	return e;
 }
 
-/*
+/**
  * Destroy the Kernel Key-Value store, removing all entries
  * and deallocating all memory.
  *
@@ -574,7 +598,7 @@ ret:
 	return e;
 }
 
-/*
+/**
  * Insert a new key-value pair. The previous value for the key, if any, is
  * replaced by the new value.
  *
@@ -597,7 +621,7 @@ static MUST_USE long kkv_put(u32 key, const void *val, size_t size, int flags)
 	return kkv_put_(&kkv, key, val, size, flags);
 }
 
-/*
+/**
  * If a key-value pair is found for the given key, the pair is
  * REMOVED from the Kernel Key-Value store.
  *
@@ -640,7 +664,8 @@ void fridge_exit(void)
 	kkv_put_ptr = NULL;
 	kkv_destroy_ptr = NULL;
 	kkv_init_ptr = NULL;
-	/* Destroy in case the user forgot so we don't leak anything.
+	/**
+	 * Destroy in case the user forgot so we don't leak anything.
 	 * It's also okay if it returns an error; we don't care.
 	 */
 	e_ = kkv_free(&kkv);
