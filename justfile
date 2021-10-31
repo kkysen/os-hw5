@@ -27,6 +27,7 @@ install-program-dependencies:
     cargo quickinstall fd-find
     cargo quickinstall sd
     cargo quickinstall gitui
+    cargo quickinstall hyperfine
 
 parallel-bash-commands:
     echo 'pids=()'
@@ -230,7 +231,17 @@ run-mod mod_path *args: (run-mod-only mod_path args)
 
 test *args: (run-mod default_mod_path args)
 
-test-part part_name: (test "just" "make-in" "user/test/FireFerrises-p" + part_name + "-test" "test-all")
+test-part-raw part_name *args: (make-in "user/test/FireFerrises-p" + part_name + "-test" args)
+
+test-part part_name: (test "just" "test-part-raw" part_name "test-all")
+
+benchmark branch:
+    git checkout "{{branch}}"
+    just make-mods
+    just load-mod
+    hyperfine 'just test-part-raw 3'
+    just unload-mod
+    git checkout -
 
 default-branch:
     git remote show origin | rg 'HEAD branch: (.*)$' --only-matching --replace '$1'
