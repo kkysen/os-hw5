@@ -70,5 +70,6 @@ error_name_map: Mapping[int, str] = {
     value: name for name, value in errno.__dict__.items() if name.startswith("E")}
 
 
-def assert_errno_eq(actual: int, expected: int):
-    assert actual == expected, f"{error_name_map[actual]} != {error_name_map[expected]}"
+def assert_errno_eq(actual: int, *expected: Tuple[int, ...]):
+    expected = set(expected)
+    assert actual in expected, f"{error_name_map[actual]} not in {{error_name_map[e] for e in expected}}"

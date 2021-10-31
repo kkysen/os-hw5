@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from multiprocessing import Pool
-from errno import EPERM
+from errno import ENOENT, EPERM
 import sys
 from pathlib import Path
 
@@ -86,7 +86,7 @@ def four_same_time(i: int):
         kkv.destroy()
         assert response == value
     except OSError as e:
-        assert_errno_eq(e.errno, EPERM) or assert_errno_eq(e.errno, ENOENT)
+        assert_errno_eq(e.errno, EPERM, ENOENT)
 
 
 def _1d_parallel_tests():
