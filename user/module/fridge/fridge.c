@@ -17,6 +17,8 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/hash.h>
+#include <linux/wait.h>
+#include <linux/sched/signal.h>
 
 #pragma GCC diagnostic pop
 
@@ -113,10 +115,10 @@ static MUST_USE long kkv_pair_copy_to_user(struct kkv_pair *this,
 
 static void kkv_ht_entry_init(struct kkv_ht_entry *this)
 {
+	init_waitqueue_head(&this->q);
 	INIT_LIST_HEAD(&this->entries);
+	this->q_count = 0;
 	kkv_pair_init(&this->kv_pair);
-	/* `this->q` unused until part 4. */
-	/* `this->q_count` unused until part 4. */
 }
 
 static void kkv_ht_entry_free(struct kkv_ht_entry *this)
@@ -523,6 +525,7 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	long e;
 	struct kkv_ht_bucket *bucket;
 	struct kkv_ht_entry *entry;
+	DEFINE_WAIT(wait);
 
 	e = 0;
 
@@ -540,10 +543,9 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	spin_lock(&bucket->lock);
 	{
-		/* Critical section: no allocs. */
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
-			/**
+		    /*
 			 * `entry` removed but not freed; do that outside critical section.
 			 * But since it's been removed, no one else has a reference to it anymore,
 			 * so we can modify it more later.
@@ -554,9 +556,39 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
 
-	if (!entry) {
+	if (!entry && flags == 0) {
 		e = -ENOENT;
 		goto ret;
+	} else if (!entry && flags == 1) {
+
+		/*Create entry for the key waiting for*/
+		e = kkv_put_(this, key, NULL, 0, KKV_NONBLOCK);
+		if (e < 0)
+			goto ret;
+
+		/*go through waiting procedure */
+		entry->q_count++;
+		for (;;) {
+			prepare_to_wait(&entry->q, &wait, TASK_INTERRUPTIBLE);
+			if (entry->kv_pair.val != NULL)
+				break;
+			if (!signal_pending(current)) {
+				schedule();
+				continue;
+			}
+			entry->q_count--;
+			e = -EINTR;
+			goto ret;
+		}
+		finish_wait(&entry->q, &wait);
+
+		/*finish up with the entry*/
+		spin_lock(&bucket->lock);
+		read_lock(&this->lock);
+		kkv_ht_bucket_remove(bucket, entry);
+		entry->q_count--;
+		spin_unlock(&bucket->lock);
+		read_unlock(&this->lock);
 	}
 	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
 	goto free_entry;
@@ -565,15 +597,15 @@ free_entry:
 	kkv_ht_entry_free(entry);
 	kmem_cache_free(this->cache, entry);
 ret:
-	if (e == -ENOENT && flags & KKV_BLOCK) {
+	//if (e == -ENOENT && flags & KKV_BLOCK) {
 		/**
 		 * Recurse from here at the end of the function
 		 * after we've cleaned up everything.
 		 */
 		/* TODO block */
 
-		return kkv_get_(this, key, user_val, user_size, flags);
-	}
+		//return kkv_get_(this, key, user_val, user_size, flags);
+	//}
 	return e;
 }
 
