@@ -132,11 +132,20 @@ TODO
 
 See part1 for our shared python test code.
 
-We used our tests to mark the benchmark for a larger number of memory allocations.
-We used the minimal value (None) in order to best compare the results so that we would primarily be looking at the memory allocation, for regular kmalloc vs the cache mem allocation.
-In our results, we saw that while the results for large memory allocations were comporable, there was a slight difference when it came to larger amounts of memory allocation
+We used our tests to benchmark with a larger number of memory allocations.
+We used set the user value length to 0 in order to avoid value allocation,
+so that we would primarily be looking at the `struct kkv_ht_entry` memory allocations,
+and regular `kmalloc` allocations for the values wouldn't hide anything.
+Even with entry allocations dominating, though,
+sometimes the part2 module would be slightly faster
+and sometimes the part3 module would be faster.
+`kmalloc` is probably already optimized for small allocations like for
+`struct kkv_ht_entry`, which is only 40 bytes, so we're guessing that's why
+there wasn't a major difference in performance.
 
 To run the tests, run `make test` in `user/test/FireFerrises-p3-test/`.
+This just times the entry allocation heavy test.
+We also tried benchmarking it through `hyperfine` to avoid outliers.
 
 
 ### part4
