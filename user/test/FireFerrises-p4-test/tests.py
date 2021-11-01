@@ -14,14 +14,6 @@ import os
 
 KEY = 1
 
-def basic_get_test():
-    value = "TEST"
-    response = kkv.get(key=KEY, len=len(value), flags=kkv.Flag.Block)
-    print(f"get {response}")
-    kkv.put(key=KEY, value=value)
-    response = kkv.get(key=KEY, len=len(value))
-    assert response == value
-
 def basic_nonblock():
     value = "TEST"
     try:
@@ -33,27 +25,16 @@ def blocking():
     value = "TEST"
     pid = os.fork()
     if pid > 0:
-        kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
-    else:
         kkv.put(key=KEY, value = value)
-
-def destroy_test():
-    value = "TEST"
-    kkv.init()
-    pid = os.fork()
-    if pid > 0:
-        try:
-            kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
-        except OSError as e:
-            assert_errno_eq(e.errno, EPERM)
+        os.wait()
     else:
-        kkv.destroy()
+        response = kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
+        assert response == value
+        exit()
 
 def main():
-    destroy_test()
     kkv.init()
     try:
-        basic_get_test()
         basic_nonblock()
         blocking()
     finally:
