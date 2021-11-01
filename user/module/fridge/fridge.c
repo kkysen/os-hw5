@@ -28,6 +28,9 @@
 
 #define MUST_USE __attribute__((warn_unused_result))
 
+#define trace()                                                                \
+	pr_info("[%d] %s:%u:%s", current->pid, __FILE__, __LINE__, __func__)
+
 extern long (*kkv_init_ptr)(int flags);
 extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);
@@ -144,12 +147,10 @@ ret:
 
 static void kkv_ht_entry_init(struct kkv_ht_entry *this, u32 key)
 {
-	*this = (struct kkv_ht_entry){
-		.entries = LIST_HEAD_INIT(this->entries),
-		.kv_pair = kkv_pair_empty_with_key(key),
-		.q = __WAIT_QUEUE_HEAD_INITIALIZER(this->q),
-		.q_count = 0,
-	};
+	INIT_LIST_HEAD(&this->entries);
+	this->kv_pair = kkv_pair_empty_with_key(key);
+	init_waitqueue_head(&this->q);
+	this->q_count = 0;
 }
 
 static void kkv_ht_entry_free(struct kkv_ht_entry *this)
@@ -179,13 +180,18 @@ static void free_kkv_ht_entry(struct kkv_ht_entry *this,
 	 * can't access `q` to call `finish_wait`.
 	 */
 	list_del(&this->entries);
+	pr_info("entry = %p, key = %u, q_count = %u\n", this, this->kv_pair.key,
+		this->q_count);
 	if (this->q_count == 0) {
-		kmem_cache_free(cache, this);
+		trace();
 	} else {
 		/* Threads woken up will know this entry is detached if it's an empty list. */
 		INIT_LIST_HEAD(&this->entries);
+		trace();
 		wake_up(&this->q);
 	}
+	kkv_ht_entry_free(this);
+	kmem_cache_free(cache, this);
 }
 
 /* Return number of entries freed. */
@@ -202,7 +208,6 @@ static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
 		 * Note that we count value-less `kkv_get(KKV_BLOCK)` entries here,
 		 * which Hans said to do.
 		 */
-		kkv_ht_entry_free(entry);
 		free_kkv_ht_entry(entry, cache);
 		this->count--;
 		n++;
@@ -535,13 +540,13 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	adding = false;
 
+	trace();
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
 		e = -EPERM;
 		goto free_entry;
 	}
 
 	bucket = kkv_buckets_get(&this->inner.buckets, key);
-
 	spin_lock(&bucket->lock);
 	{
 		/* Critical section: no allocs. */
@@ -555,11 +560,17 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 			kkv_ht_bucket_add(bucket, entry);
 		}
 		kkv_pair_swap(&pair, &entry->kv_pair);
-		if (entry->q_count > 0)
+		if (entry->q_count > 0) {
+			trace();
+			pr_info("key = %u, q_count = %u\n", key,
+				entry->q_count);
 			wake_up(&entry->q);
+			trace();
+		}
 	}
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
+	trace();
 	goto free_entry;
 
 free_entry:
@@ -568,38 +579,41 @@ free_entry:
 pair_free:
 	kkv_pair_free(&pair);
 ret:
+	trace();
 	return e;
 }
 
-static void free_detached_empty_entry(struct kkv_ht_entry *empty_entry,
-				      struct wait_queue_entry *wait,
-				      struct kmem_cache *cache)
-{
-	/**
-	 * `kkv_destroy` must've been called,
-	 * which skips freeing entries with `q_count`s
-	 * and wakes up the queue, so we have to do that.
-	 * Only one thread can free the entry, though,
-	 * so we have to use `q_count` as a reference count.
-	 * It's not atomic, though, so we have to synchronize access to it.
-	 * The entry doesn't have a lock either, but the queue does,
-	 * so co-opt that (not sure if it's safe,
-	 * but we're not allowed to modify the entry struct).
-	 * Also, we can't use the kkv rwlock,
-	 * since our entry is currently detached from the kkv.
-	 * We also have to free after unlocking, since the free frees the lock.
-	 * This is okay, though; the locking is for determining who frees.
-	 * Or can we call still call atomic functions on non-atomic integers?
-	 */
-	bool free;
+//static void free_detached_empty_entry(struct kkv_ht_entry *empty_entry,
+//				      struct wait_queue_entry *wait,
+//				      struct kmem_cache *cache)
+//{
+//	/**
+//	 * `kkv_destroy` must've been called,
+//	 * which skips freeing entries with `q_count`s
+//	 * and wakes up the queue, so we have to do that.
+//	 * Only one thread can free the entry, though,
+//	 * so we have to use `q_count` as a reference count.
+//	 * It's not atomic, though, so we have to synchronize access to it.
+//	 * The entry doesn't have a lock either, but the queue does,
+//	 * so co-opt that (not sure if it's safe,
+//	 * but we're not allowed to modify the entry struct).
+//	 * Also, we can't use the kkv rwlock,
+//	 * since our entry is currently detached from the kkv.
+//	 * We also have to free after unlocking, since the free frees the lock.
+//	 * This is okay, though; the locking is for determining who frees.
+//	 * Or can we call still call atomic functions on non-atomic integers?
+//	 */
+//	bool free;
+//	// atomic_t *count;
 
-	spin_lock(&empty_entry->q.lock);
-	finish_wait(&empty_entry->q, wait);
-	free = --empty_entry->q_count == 0;
-	spin_unlock(&empty_entry->q.lock);
-	if (free)
-		kmem_cache_free(cache, empty_entry);
-}
+//	trace();
+//	finish_wait(&empty_entry->q, wait);
+//	//count = (atomic_t *) &empty_entry->q_count;
+//	//free = atomic_
+//	free = --empty_entry->q_count == 0;
+//	if (free)
+//		kmem_cache_free(cache, empty_entry);
+//}
 
 static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			      size_t user_size, int flags)
@@ -631,15 +645,19 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			goto ret;
 		}
 	}
+	trace();
 
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
 		e = -EPERM;
 		goto ret;
 	}
+	trace();
 
 	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
+	trace();
 	spin_lock(&bucket->lock);
+	trace();
 	{
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
@@ -654,6 +672,7 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 				kkv_ht_bucket_remove(bucket, entry);
 			} else if (block) {
 				empty_entry = entry;
+				entry = NULL;
 			} else {
 				/* `entry` is empty, but non blocking. */
 				entry = NULL;
@@ -666,30 +685,45 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			kkv_ht_bucket_add(bucket, empty_entry);
 		}
 	}
+	trace();
 	spin_unlock(&bucket->lock);
+	trace();
 
-	if (block) {
+	if (empty_entry && block) {
+		trace();
+		pr_info("empty_entry = %p\n", empty_entry);
 		empty_entry->q_count++;
+		trace();
 		prepare_to_wait(&empty_entry->q, &wait, TASK_INTERRUPTIBLE);
+		trace();
+		pr_info("entry = %p, key = %u, q_count = %u\n", empty_entry,
+			empty_entry->kv_pair.key, empty_entry->q_count);
 	}
+	trace();
 	read_unlock(&this->lock);
+	trace();
 
 	if (new_entry) {
 		/**
 		 * If `new_entry` was added to the kkv,
 		 * it is assigned to `empty_entry` and set to NULL.
 		 */
+		trace();
 		kmem_cache_free(this->cache, new_entry);
+		trace();
 	}
 
 	pair = kkv_pair_empty_with_key(key);
 	if (entry) {
+		trace();
 		kkv_pair_swap(&pair, &entry->kv_pair);
 	} else {
 		if (!block) {
 			e = -ENOENT;
+			trace();
 			goto ret;
 		}
+		trace();
 
 		/**
 		 * `new_entry` is currently in the kkv,
@@ -702,12 +736,15 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			bool break_loop;
 
 			break_loop = false;
+			trace();
 			schedule();
+			trace();
 			if (!kkv_lock(this, /* write */ false,
 				      /* expect init */ true)) {
 				e = -EPERM;
-				free_detached_empty_entry(empty_entry, &wait,
-							  this->cache);
+				// free_detached_empty_entry(empty_entry, &wait,
+				// 			  this->cache);
+				trace();
 				goto ret;
 			}
 			if (list_empty(&empty_entry->entries)) {
@@ -717,23 +754,27 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 				 * but we're detached and need to free ourselves.
 				 */
 				read_unlock(&this->lock);
-				free_detached_empty_entry(empty_entry, &wait,
-							  this->cache);
+				// free_detached_empty_entry(empty_entry, &wait,
+				// 			  this->cache);
 				e = -EPERM;
+				trace();
 				goto ret;
 			}
 			spin_lock(&bucket->lock);
 			if (signal_pending(current)) {
 				e = -EINTR;
+				trace();
 				goto break_loop;
 			}
 
 			if (empty_entry->kv_pair.val != NULL) {
 				kkv_pair_swap(&pair, &empty_entry->kv_pair);
+				trace();
 				goto break_loop;
 			}
 			prepare_to_wait(&empty_entry->q, &wait,
 					TASK_INTERRUPTIBLE);
+			trace();
 			goto unlock;
 
 break_loop:
@@ -751,7 +792,10 @@ unlock:
 				break;
 		}
 	}
+	if (e < 0)
+		goto free_entry;
 
+	trace();
 	e = kkv_pair_copy_to_user(&pair, user_val, user_size);
 	goto free_entry;
 
@@ -762,6 +806,7 @@ free_entry:
 	}
 	kkv_pair_free(&pair);
 ret:
+	trace();
 	return e;
 }
 
