@@ -170,30 +170,6 @@ static void kkv_ht_bucket_init(struct kkv_ht_bucket *this)
 	};
 }
 
-static void free_kkv_ht_entry(struct kkv_ht_entry *this,
-			      struct kmem_cache *cache)
-{
-	/**
-	 * We only free entries that have no `q_count`, however,
-	 * since we have to no way of calling `finish_wait` on them,
-	 * and if we free it here, then the blocking get
-	 * can't access `q` to call `finish_wait`.
-	 */
-	list_del(&this->entries);
-	pr_info("entry = %p, key = %u, q_count = %u\n", this, this->kv_pair.key,
-		this->q_count);
-	if (this->q_count == 0) {
-		trace();
-	} else {
-		/* Threads woken up will know this entry is detached if it's an empty list. */
-		INIT_LIST_HEAD(&this->entries);
-		trace();
-		wake_up(&this->q);
-	}
-	kkv_ht_entry_free(this);
-	kmem_cache_free(cache, this);
-}
-
 /* Return number of entries freed. */
 static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
 					  struct kmem_cache *cache)
@@ -208,7 +184,11 @@ static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
 		 * Note that we count value-less `kkv_get(KKV_BLOCK)` entries here,
 		 * which Hans said to do.
 		 */
-		free_kkv_ht_entry(entry, cache);
+		list_del(&entry->entries);
+		if (entry->q_count > 0)
+			wake_up(&entry->q);
+		kkv_ht_entry_free(entry);
+		kmem_cache_free(cache, entry);
 		this->count--;
 		n++;
 	}
