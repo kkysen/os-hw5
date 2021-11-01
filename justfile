@@ -151,6 +151,7 @@ refmt *paths:
         let s = await fsp.readFile(path);
         s = s.toString();
         const original = s;
+        // fix for each macros
         s = s.replaceAll(/([a-z_]*for_each[a-z_]*) /g, (_, macroName) => macroName);
         const to = s;
         await fsp.writeFile(path, s);
