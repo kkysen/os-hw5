@@ -40,15 +40,17 @@ def blocking():
 def destroy_test():
     value = "TEST"
     kkv.init()
-    try:
-        kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
+    pid = os.fork()
+    if pid > 0:
+        try:
+            kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
+        except OSError as e:
+            assert_errno_eq(e.errno, EPERM)
+    else:
         kkv.destroy()
-    except OSError as e:
-        assert_errno_eq(e.errno, EPERM)
 
 def main():
-    try:
-        destroy_test()
+    destroy_test()
     kkv.init()
     try:
         basic_get_test()
