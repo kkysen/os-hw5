@@ -184,13 +184,13 @@ static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
 		 * Note that we count value-less `kkv_get(KKV_BLOCK)` entries here,
 		 * which Hans said to do.
 		 */
+		this->count--;
+		n += entry->q_count == 0 ? 1 : entry->q_count;
 		list_del(&entry->entries);
 		if (entry->q_count > 0)
 			wake_up(&entry->q);
 		kkv_ht_entry_free(entry);
 		kmem_cache_free(cache, entry);
-		this->count--;
-		n++;
 	}
 
 	/* spinlocks don't need to be freed */
