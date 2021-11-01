@@ -230,7 +230,9 @@ the kkv is no longer initialized and return with `-EPERM`.
 ##### Tests
 
 See part1 for our shared python test code.
-
-TODO
+We ran a test to confirm that our non-blocking was working as normal with the blocking added.
+We also created a test to get and put with blocking. The test uses fork to work with the put and get and
+tests whether the blocking works with get and then it returns when the put value is in the entry
+(and able to be/is then removed).
 
 To run the tests, run `make test` in `user/test/FireFerrises-p4-test/`.
