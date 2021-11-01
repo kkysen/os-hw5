@@ -42,12 +42,12 @@ def destroy_test():
     kkv.init()
     pid = os.fork()
     if pid > 0:
-        kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
-    else:
         try:
-            kkv.destroy()
+            kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
         except OSError as e:
             assert_errno_eq(e.errno, EPERM)
+    else:
+        kkv.destroy()
 
 def main():
     destroy_test()
