@@ -17,6 +17,8 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/hash.h>
+#include <linux/wait.h>
+#include <linux/sched/signal.h>
 
 #pragma GCC diagnostic pop
 
@@ -48,11 +50,13 @@ struct kkv {
 	struct kmem_cache *cache;
 };
 
-static void kkv_pair_init(struct kkv_pair *this)
+static MUST_USE struct kkv_pair kkv_pair_empty_with_key(u32 key)
 {
-	this->key = (u32)-1;
-	this->size = 0;
-	this->val = NULL;
+	return (struct kkv_pair){
+		.key = key,
+		.size = 0,
+		.val = NULL,
+	};
 }
 
 static void kkv_pair_free(struct kkv_pair *this)
@@ -66,6 +70,17 @@ static void kkv_pair_free(struct kkv_pair *this)
 	this->key = (u32)-1;
 }
 
+static void kkv_pair_swap(struct kkv_pair *a, struct kkv_pair *b)
+{
+	struct kkv_pair tmp;
+
+	tmp = *a;
+	*a = *b;
+	*b = tmp;
+}
+
+static char ZERO_LENGTH_ARRAY[] = {};
+
 static MUST_USE long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 					     const void *user_val, size_t size)
 {
@@ -74,7 +89,12 @@ static MUST_USE long kkv_pair_init_from_user(struct kkv_pair *this, u32 key,
 	e = 0;
 
 	if (size == 0) {
-		this->val = NULL;
+		/**
+		 * Don't use `NULL` here, because that indicates there is no value at all.
+		 * This is just a zero-length value that can be shared
+		 * b/c it is zero-length and thus effectively immutable.
+		 */
+		this->val = ZERO_LENGTH_ARRAY;
 	} else {
 		this->val = kmalloc(size, GFP_KERNEL);
 		if (!this->val) {
@@ -100,29 +120,40 @@ ret:
 static MUST_USE long kkv_pair_copy_to_user(struct kkv_pair *this,
 					   void *user_val, size_t user_size)
 {
+	long e;
+	size_t size;
+
+	e = 0;
+	size = min(this->size, user_size);
+	if (size == 0)
+		goto ret;
+
 	/* The user tried to copy more bytes from kernel, just truncate it.
 	 * If the user copies fewer bytes, return what they asked for,
 	 * even though there's more data.
 	 */
-	if (copy_to_user(user_val, this->val, min(this->size, user_size)) !=
-	    0) {
-		return -EFAULT;
+	if (copy_to_user(user_val, this->val, size) != 0) {
+		e = -EFAULT;
+		goto ret;
 	}
-	return 0;
+	goto ret;
+
+ret:
+	return e;
 }
 
-static void kkv_ht_entry_init(struct kkv_ht_entry *this)
+static void kkv_ht_entry_init(struct kkv_ht_entry *this, u32 key)
 {
 	INIT_LIST_HEAD(&this->entries);
-	kkv_pair_init(&this->kv_pair);
-	/* `this->q` unused until part 4. */
-	/* `this->q_count` unused until part 4. */
+	this->kv_pair = kkv_pair_empty_with_key(key);
+	init_waitqueue_head(&this->q);
+	this->q_count = 0;
 }
 
 static void kkv_ht_entry_free(struct kkv_ht_entry *this)
 {
-	/* `this->q_count` unused until part 4. */
-	/* `this->q` unused until part 4. */
+	this->q_count = 0;
+	/* `this->q` has no destructor */
 	kkv_pair_free(&this->kv_pair);
 	/* `this->entries` freed by container. */
 }
@@ -146,11 +177,17 @@ static MUST_USE size_t kkv_ht_bucket_free(struct kkv_ht_bucket *this,
 
 	n = 0;
 	list_for_each_entry_safe(entry, tmp, &this->entries, entries) {
-		kkv_ht_entry_free(entry);
-		list_del(&entry->entries);
-		kmem_cache_free(cache, entry);
+		/**
+		 * Note that we count value-less `kkv_get(KKV_BLOCK)` entries here,
+		 * which Hans said to do.
+		 */
 		this->count--;
-		n++;
+		n += entry->q_count == 0 ? 1 : entry->q_count;
+		list_del(&entry->entries);
+		if (entry->q_count > 0)
+			wake_up(&entry->q);
+		kkv_ht_entry_free(entry);
+		kmem_cache_free(cache, entry);
 	}
 
 	/* spinlocks don't need to be freed */
@@ -486,23 +523,21 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 
 	bucket = kkv_buckets_get(&this->inner.buckets, key);
-
 	spin_lock(&bucket->lock);
 	{
 		/* Critical section: no allocs. */
 		struct kkv_ht_entry *entry;
-		struct kkv_pair tmp;
 
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (!entry) {
 			adding = true;
 			entry = new_entry;
-			kkv_ht_entry_init(entry);
+			kkv_ht_entry_init(entry, (u32)-1);
 			kkv_ht_bucket_add(bucket, entry);
 		}
-		tmp = entry->kv_pair;
-		entry->kv_pair = pair;
-		pair = tmp;
+		kkv_pair_swap(&pair, &entry->kv_pair);
+		if (entry->q_count > 0)
+			wake_up(&entry->q);
 	}
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
@@ -521,14 +556,31 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			      size_t user_size, int flags)
 {
 	long e;
+	bool block;
 	struct kkv_ht_bucket *bucket;
+	struct kkv_ht_entry *new_entry;
+	struct kkv_ht_entry *empty_entry;
 	struct kkv_ht_entry *entry;
+	struct kkv_pair pair;
+	DEFINE_WAIT(wait);
 
 	e = 0;
 
-	if (flags != KKV_NONBLOCK) {
+	if (flags & ~(KKV_NONBLOCK | KKV_BLOCK)) {
 		e = -EINVAL;
 		goto ret;
+	}
+	block = flags & KKV_BLOCK;
+
+	if (!block) {
+		new_entry = NULL;
+		empty_entry = NULL;
+	} else {
+		new_entry = kmem_cache_alloc(this->cache, GFP_KERNEL);
+		if (!new_entry) {
+			e = -ENOMEM;
+			goto ret;
+		}
 	}
 
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
@@ -540,30 +592,115 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 
 	spin_lock(&bucket->lock);
 	{
-		/* Critical section: no allocs. */
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
-			/**
-			 * `entry` removed but not freed; do that outside critical section.
-			 * But since it's been removed, no one else has a reference to it anymore,
-			 * so we can modify it more later.
-			 */
-			kkv_ht_bucket_remove(bucket, entry);
+			if (entry->kv_pair.val) {
+				/**
+				 * `entry` removed but not freed;
+				 * do that outside critical section.
+				 * But since it's been removed,
+				 * no one else has a reference to it anymore,
+				 * so we can modify it more later.
+				 */
+				kkv_ht_bucket_remove(bucket, entry);
+			} else if (block) {
+				empty_entry = entry;
+				entry = NULL;
+			} else {
+				/* `entry` is empty, but non blocking. */
+				entry = NULL;
+			}
+		} else if (block) {
+			/* Sets pair value to NULL. */
+			empty_entry = new_entry;
+			new_entry = NULL;
+			kkv_ht_entry_init(empty_entry, key);
+			kkv_ht_bucket_add(bucket, empty_entry);
 		}
 	}
 	spin_unlock(&bucket->lock);
+
+	if (empty_entry && block) {
+		empty_entry->q_count++;
+		prepare_to_wait(&empty_entry->q, &wait, TASK_INTERRUPTIBLE);
+	}
 	read_unlock(&this->lock);
 
-	if (!entry) {
-		e = -ENOENT;
-		goto ret;
+	if (new_entry) {
+		/**
+		 * If `new_entry` was added to the kkv,
+		 * it is assigned to `empty_entry` and set to NULL.
+		 */
+		kmem_cache_free(this->cache, new_entry);
 	}
-	e = kkv_pair_copy_to_user(&entry->kv_pair, user_val, user_size);
+
+	pair = kkv_pair_empty_with_key(key);
+	if (entry) {
+		kkv_pair_swap(&pair, &entry->kv_pair);
+	} else {
+		if (!block) {
+			e = -ENOENT;
+			goto ret;
+		}
+
+		/**
+		 * `new_entry` is currently in the kkv,
+		 * which means `kkv_destroy()` could free it at any moment
+		 * unless we have a read lock.
+		 * Assign to `entry` when it's no longer in the kkv,
+		 * since `entry` can be accessed without any lock.
+		 */
+		for (;;) {
+			bool break_loop;
+
+			break_loop = false;
+			schedule();
+			if (!kkv_lock(this, /* write */ false,
+				      /* expect init */ true)) {
+				e = -EPERM;
+				goto ret;
+			}
+			spin_lock(&bucket->lock);
+			if (signal_pending(current)) {
+				e = -EINTR;
+				goto break_loop;
+			}
+
+			if (empty_entry->kv_pair.val != NULL) {
+				kkv_pair_swap(&pair, &empty_entry->kv_pair);
+				goto break_loop;
+			}
+			prepare_to_wait(&empty_entry->q, &wait,
+					TASK_INTERRUPTIBLE);
+			goto unlock;
+
+break_loop:
+			break_loop = true;
+			if (--empty_entry->q_count == 0) {
+				kkv_ht_bucket_remove(bucket, empty_entry);
+				/* will be freed */
+				entry = empty_entry;
+			}
+			finish_wait(&empty_entry->q, &wait);
+unlock:
+			spin_unlock(&bucket->lock);
+			read_unlock(&this->lock);
+			if (break_loop)
+				break;
+		}
+	}
+	if (e < 0)
+		goto free_entry;
+
+	e = kkv_pair_copy_to_user(&pair, user_val, user_size);
 	goto free_entry;
 
 free_entry:
-	kkv_ht_entry_free(entry);
-	kmem_cache_free(this->cache, entry);
+	if (entry) {
+		kkv_ht_entry_free(entry);
+		kmem_cache_free(this->cache, entry);
+	}
+	kkv_pair_free(&pair);
 ret:
 	return e;
 }

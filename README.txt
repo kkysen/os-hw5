@@ -167,16 +167,76 @@ We also tried benchmarking it through `hyperfine` to avoid outliers.
 
 ### part4
 
-This part is TODO.
+This part is working.
 
 ##### Module
 
-TODO
+In `kkv_get`, when `KKV_BLOCK` is passed, the code path is similar to
+a mix of non-blocking `kkv_get` and `kkv_put`.
+We allocate an empty entry before the critical section
+in case we need to insert it.
+While in the bucket critical section, we either
+remove a normal entry (normal get behavior),
+find an existing empty entry (which we need to wait on),
+or find nothing, in case we insert our new empty entry.
+In the non-blocking case, we just do as before.
+
+Then after we've unlocked the bucket but still hold the kkv read lock,
+we increment the `q_count` and call `prepare_to_wait` (if blocking).
+We need to do this while still in the read lock since the empty entry
+is currently in the kkv, and a `kkv_destroy()`
+could free it at any moment (if not locked).
+
+Then we unlock the read lock before entering the `schedule` loop.
+After `schedule` returns, we first acquire the read lock again
+so that we can access the empty entry again.
+If we can't, like if `kkv_destroy` was called, then we return with `-EPERM`.
+
+Then we acquire the bucket lock and check if there were pending signals,
+in which case we return with `-EINTR`.
+We need the bucket lock because we have to
+decrement the `q_count` and call `finish_wait` on the empty entry,
+which we can only access with the bucket lock since otherwise other threads could, too.
+(That's why we check for `EPERM` before `EINTR`,
+because we return from `EINTR` if we couldn't get the read lock
+(i.e., the kkv wasn't initialized anymore)).
+
+Then if the empty entry is no longer empty (a non-null value),
+then we swap it out to our local (on the stack) `kv_pair`,
+which was empty again.  This way we get an exclusive reference to the non-empty pair,
+while the shared empty entry now is empty again for other blocking gets waiting.
+
+If the entry is still empty, like if another blocking get got it first,
+then we `prepare_to_wait` again, unlock the locks, and continue the loop,
+scheduling again.
+
+Note that we only remove the empty entry (and free it outside the locks)
+if the `q_count` goes to 0, meaning no one else is using it anymore.
+
+
+Then in `kkv_put`, we just call `wake_up` on the entry's queue if
+it has a positive `q_count`, indicating there are blocking gets waiting on it.
+
+When the user size is 0, we use a global zero-length array as the value,
+which is different from `NULL`, which we reserve to mean no value,
+like when blocking get adds an empty entry.
+Thus, we can always differentiate between the two cases.
+
+In `kkv_destroy`, we wake up the queue for any entries
+that have a positive `q_count`, which allows them to wake up,
+try to acquire the kkv read lock, and then see that
+the kkv is no longer initialized and return with `-EPERM`.
 
 ##### Tests
 
 See part1 for our shared python test code.
 
-TODO
+We ran a test to confirm that our non-blocking was
+working as normalwith the blocking added.
+We also created a test to get and put with blocking.
+The test uses fork to work with the put and get and
+tests whether the blocking works with get and then it
+returns when the put value is in the entry
+(and able to be/is then removed).
 
 To run the tests, run `make test` in `user/test/FireFerrises-p4-test/`.

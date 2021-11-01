@@ -75,13 +75,25 @@ make-non-kernel *args: (make-user args)
 
 make-kernel *args: (make-in "linux" args)
 
-set-config-flag name value:
-    sd '^(CONFIG_{{name}})=(.*)$' '$1={{value}}' linux/.config
-
 modify-config:
-    just set-config-flag LOCALVERSION "\"-$(just get-git-uni)-fridge\""
-    just set-config-flag BLK_DEV_LOOP y
-    just set-config-flag SYSTEM_TRUSTED_KEYS ""
+    ./linux/scripts/config --file linux/.config \
+        --set-str LOCALVERSION "\"-$(just get-git-uni)-fridge\"" \
+        --enable BLK_DEV_LOOP \
+        --set-val SYSTEM_TRUSTED_KEYS '' \
+        --enable STACKTRACE \
+        --enable KASAN \
+        --enable KASAN_GENERIC \
+        --enable KASAN_INLINE \
+        --disable KASAN_VMALLOC \
+        --disable TEST_KASAN_MODULE \
+        --enable UBSAN \
+        --disable UBSAN_TRAP \
+        --enable UBSAN_BOUNDS \
+        --enable UBSAN_MISC \
+        --disable UBSAN_SANITIZE_ALL \
+        --disable UBSAN_ALIGNMENT \
+        --disable TEST_UBSAN \
+        --disable RANDOMIZE_BASE
 
 generate-config: && modify-config
     yes '' | just make-kernel localmodconfig
@@ -94,6 +106,25 @@ setup-kernel: (make-kernel "mrproper") generate-config make-kernel install-kerne
 
 install-fridge:
     sudo -E env "PATH=${PATH}" just make-fridge install
+
+git-clone repo *args=("--recursive"):
+    cd "{{invocation_directory()}}" && \
+        command -v gh >/dev/null \
+        && gh repo clone "{{repo}}" -- {{args}} \
+        || git clone "https://github.com/{{repo}}" {{args}}
+
+reinstall-kedr:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+
+    rm -rf ~/kedr
+    just git-clone hmontero1205/kedr ~/kedr
+    cd ~/kedr/sources
+    mkdir build
+    cd build
+    cmake ..
+    make -j{{n_proc}}
+    sudo make install
 
 # Paranthesized deps to avoid checkpatch repeated word warning
 make: (pre-make) (make-non-kernel) (make-kernel)
@@ -120,6 +151,7 @@ refmt *paths:
         let s = await fsp.readFile(path);
         s = s.toString();
         const original = s;
+        // fix for each macros
         s = s.replaceAll(/([a-z_]*for_each[a-z_]*) /g, (_, macroName) => macroName);
         const to = s;
         await fsp.writeFile(path, s);
@@ -209,10 +241,10 @@ log *args:
 
 log-watch *args: (log "--follow-new" args)
 
-run-mod-priv mod_path *args:
+run-mod mod_path *args:
     #!/usr/bin/env bash
     just log | wc -l > log.length
-    kedr start "{{mod_path}}"
+    sudo kedr start "{{mod_path}}"
     echo "running $(tput setaf 2){{file_stem(mod_path)}}$(tput sgr 0):"
     just load-mod "{{mod_path}}"
     {{args}}
@@ -222,12 +254,7 @@ run-mod-priv mod_path *args:
     exit
     cd /sys/kernel/debug/kedr_leak_check
     bat --paging never info possible_leaks unallocated_frees
-    kedr stop
-
-run-mod-only mod_path *args:
-    sudo env "PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin" just run-mod-priv "{{mod_path}}" {{args}}
-
-run-mod mod_path *args: (run-mod-only mod_path args)
+    sudo kedr stop
 
 test *args: (run-mod default_mod_path args)
 

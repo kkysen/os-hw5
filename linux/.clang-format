@@ -545,4 +545,5 @@ SpacesInSquareBrackets: false
 Standard: Cpp03
 TabWidth: 8
 UseTab: Always
+IndentGotoLabels: false
 ...
