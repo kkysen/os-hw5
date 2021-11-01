@@ -583,38 +583,6 @@ ret:
 	return e;
 }
 
-//static void free_detached_empty_entry(struct kkv_ht_entry *empty_entry,
-//				      struct wait_queue_entry *wait,
-//				      struct kmem_cache *cache)
-//{
-//	/**
-//	 * `kkv_destroy` must've been called,
-//	 * which skips freeing entries with `q_count`s
-//	 * and wakes up the queue, so we have to do that.
-//	 * Only one thread can free the entry, though,
-//	 * so we have to use `q_count` as a reference count.
-//	 * It's not atomic, though, so we have to synchronize access to it.
-//	 * The entry doesn't have a lock either, but the queue does,
-//	 * so co-opt that (not sure if it's safe,
-//	 * but we're not allowed to modify the entry struct).
-//	 * Also, we can't use the kkv rwlock,
-//	 * since our entry is currently detached from the kkv.
-//	 * We also have to free after unlocking, since the free frees the lock.
-//	 * This is okay, though; the locking is for determining who frees.
-//	 * Or can we call still call atomic functions on non-atomic integers?
-//	 */
-//	bool free;
-//	// atomic_t *count;
-
-//	trace();
-//	finish_wait(&empty_entry->q, wait);
-//	//count = (atomic_t *) &empty_entry->q_count;
-//	//free = atomic_
-//	free = --empty_entry->q_count == 0;
-//	if (free)
-//		kmem_cache_free(cache, empty_entry);
-//}
-
 static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			      size_t user_size, int flags)
 {
@@ -741,21 +709,6 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			trace();
 			if (!kkv_lock(this, /* write */ false,
 				      /* expect init */ true)) {
-				e = -EPERM;
-				// free_detached_empty_entry(empty_entry, &wait,
-				// 			  this->cache);
-				trace();
-				goto ret;
-			}
-			if (list_empty(&empty_entry->entries)) {
-				/**
-				 * kkv was destroyed and re-initialized,
-				 * so we could get the lock,
-				 * but we're detached and need to free ourselves.
-				 */
-				read_unlock(&this->lock);
-				// free_detached_empty_entry(empty_entry, &wait,
-				// 			  this->cache);
 				e = -EPERM;
 				trace();
 				goto ret;
