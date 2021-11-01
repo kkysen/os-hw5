@@ -10,6 +10,7 @@ sys.path.append(Path(__file__).parent.parent.__str__())
 
 import kkv
 from kkv import assert_errno_eq
+import os
 
 KEY = 1
 
@@ -28,26 +29,31 @@ def basic_nonblock():
     except OSError as e:
         assert_errno_eq(e.errno, ENOENT)
 
-def blocking_test(i: int):
-    #Using get and put in any order
-    key = KEY
-    value = "TESTING"
-    kkv.put(key=key, value=value)
-    print(f"{i}: put {value}")
-    response = kkv.get(key=key, len=len(value), flags=kkv.Flag.Block)
-    print(f"{i}: get {response}")
-    assert response == value
+def blocking():
+    value = "TEST"
+    pid = os.fork()
+    if pid > 0:
+        kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
+    else:
+        kkv.put(key=KEY, value = value)
 
-def parallel_tests(num_procs: int, num_reps: int, f: Callable[[int], None]):
-    with Pool(processes=num_procs) as pool:
-        pool.map(f, range(num_reps))
+def destory_test():
+    value = "TEST"
+    kkv.init()
+    try:
+        kkv.get(key=KEY, len=10, flags = kkv.Flag.Block)
+        kkv.destroy()
+    except OSError as e:
+        assert_errno_eq(e.errno, EPERM)
 
 def main():
+    try:
+        destroy_test()
     kkv.init()
     try:
         basic_get_test()
         basic_nonblock()
-        parallel_tests(num_procs=10, num_reps=10, f=blocking_test)
+        blocking()
     finally:
         kkv.destroy()
 
