@@ -37,7 +37,7 @@ def blocking():
     else:
         kkv.put(key=KEY, value = value)
 
-def destory_test():
+def destroy_test():
     value = "TEST"
     kkv.init()
     try:
