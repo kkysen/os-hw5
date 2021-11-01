@@ -28,9 +28,6 @@
 
 #define MUST_USE __attribute__((warn_unused_result))
 
-#define trace()                                                                \
-	pr_info("[%d] %s:%u:%s", current->pid, __FILE__, __LINE__, __func__)
-
 extern long (*kkv_init_ptr)(int flags);
 extern long (*kkv_destroy_ptr)(int flags);
 extern long (*kkv_put_ptr)(u32 key, const void *val, size_t size, int flags);
@@ -520,7 +517,6 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 	}
 	adding = false;
 
-	trace();
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
 		e = -EPERM;
 		goto free_entry;
@@ -540,17 +536,11 @@ static MUST_USE long kkv_put_(struct kkv *this, u32 key, const void *user_val,
 			kkv_ht_bucket_add(bucket, entry);
 		}
 		kkv_pair_swap(&pair, &entry->kv_pair);
-		if (entry->q_count > 0) {
-			trace();
-			pr_info("key = %u, q_count = %u\n", key,
-				entry->q_count);
+		if (entry->q_count > 0)
 			wake_up(&entry->q);
-			trace();
-		}
 	}
 	spin_unlock(&bucket->lock);
 	read_unlock(&this->lock);
-	trace();
 	goto free_entry;
 
 free_entry:
@@ -559,7 +549,6 @@ free_entry:
 pair_free:
 	kkv_pair_free(&pair);
 ret:
-	trace();
 	return e;
 }
 
@@ -593,19 +582,15 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			goto ret;
 		}
 	}
-	trace();
 
 	if (!kkv_lock(this, /* write */ false, /* expect init */ true)) {
 		e = -EPERM;
 		goto ret;
 	}
-	trace();
 
 	bucket = kkv_buckets_get(&this->inner.buckets, key);
 
-	trace();
 	spin_lock(&bucket->lock);
-	trace();
 	{
 		entry = kkv_ht_bucket_find(bucket, key);
 		if (entry) {
@@ -633,45 +618,30 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			kkv_ht_bucket_add(bucket, empty_entry);
 		}
 	}
-	trace();
 	spin_unlock(&bucket->lock);
-	trace();
 
 	if (empty_entry && block) {
-		trace();
-		pr_info("empty_entry = %p\n", empty_entry);
 		empty_entry->q_count++;
-		trace();
 		prepare_to_wait(&empty_entry->q, &wait, TASK_INTERRUPTIBLE);
-		trace();
-		pr_info("entry = %p, key = %u, q_count = %u\n", empty_entry,
-			empty_entry->kv_pair.key, empty_entry->q_count);
 	}
-	trace();
 	read_unlock(&this->lock);
-	trace();
 
 	if (new_entry) {
 		/**
 		 * If `new_entry` was added to the kkv,
 		 * it is assigned to `empty_entry` and set to NULL.
 		 */
-		trace();
 		kmem_cache_free(this->cache, new_entry);
-		trace();
 	}
 
 	pair = kkv_pair_empty_with_key(key);
 	if (entry) {
-		trace();
 		kkv_pair_swap(&pair, &entry->kv_pair);
 	} else {
 		if (!block) {
 			e = -ENOENT;
-			trace();
 			goto ret;
 		}
-		trace();
 
 		/**
 		 * `new_entry` is currently in the kkv,
@@ -684,30 +654,24 @@ static MUST_USE long kkv_get_(struct kkv *this, u32 key, void *user_val,
 			bool break_loop;
 
 			break_loop = false;
-			trace();
 			schedule();
-			trace();
 			if (!kkv_lock(this, /* write */ false,
 				      /* expect init */ true)) {
 				e = -EPERM;
-				trace();
 				goto ret;
 			}
 			spin_lock(&bucket->lock);
 			if (signal_pending(current)) {
 				e = -EINTR;
-				trace();
 				goto break_loop;
 			}
 
 			if (empty_entry->kv_pair.val != NULL) {
 				kkv_pair_swap(&pair, &empty_entry->kv_pair);
-				trace();
 				goto break_loop;
 			}
 			prepare_to_wait(&empty_entry->q, &wait,
 					TASK_INTERRUPTIBLE);
-			trace();
 			goto unlock;
 
 break_loop:
@@ -728,7 +692,6 @@ unlock:
 	if (e < 0)
 		goto free_entry;
 
-	trace();
 	e = kkv_pair_copy_to_user(&pair, user_val, user_size);
 	goto free_entry;
 
@@ -739,7 +702,6 @@ free_entry:
 	}
 	kkv_pair_free(&pair);
 ret:
-	trace();
 	return e;
 }
 
